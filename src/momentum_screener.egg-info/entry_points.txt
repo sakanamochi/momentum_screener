@@ -1,0 +1,2 @@
+[console_scripts]
+momentum-screener = momentum_screener.cli:main
