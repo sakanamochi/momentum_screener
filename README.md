@@ -23,7 +23,7 @@ python -m pip install -e .
 
 通常は `scripts` だけ使えば十分です。
 
-最新候補を出し直す:
+日々の通常運用。OHLCVだけ更新し、既存モデルで推論します。CSVが最新なら表示だけ行います。
 
 ```bat
 scripts\screen_latest.bat
@@ -51,7 +51,7 @@ scripts\build_listed_stocks.bat
 .\scripts\build_listed_stocks.ps1
 ```
 
-全普通株データを取り直して再学習する:
+モデルを再学習する。毎日行う必要はなく、銘柄リストや方針を変えた時、または月1回程度の見直し用です。
 
 ```bat
 scripts\train_current.bat

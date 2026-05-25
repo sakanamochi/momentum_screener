@@ -188,3 +188,32 @@ def load_or_download_ohlcv(
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
     return df
+
+
+def refresh_ohlcv_cache(
+    symbols: list[str],
+    start: str,
+    end: str | None,
+    cache_path: str | Path,
+    batch_size: int = 100,
+) -> pd.DataFrame:
+    path = Path(cache_path)
+    existing = pd.DataFrame(columns=REQUIRED_COLUMNS)
+    if path.exists():
+        existing = pd.read_csv(path, parse_dates=["date"])
+        missing = set(REQUIRED_COLUMNS) - set(existing.columns)
+        if missing:
+            raise ValueError(f"Cached OHLCV is missing columns: {sorted(missing)}")
+        existing = existing[REQUIRED_COLUMNS]
+        if not existing.empty:
+            max_date = existing["date"].max()
+            start = max(max_date - pd.Timedelta(days=10), pd.Timestamp(start)).strftime("%Y-%m-%d")
+
+    latest = download_ohlcv(symbols, start=start, end=end, batch_size=batch_size)
+    merged = pd.concat([existing, latest], ignore_index=True)
+    merged = merged.drop_duplicates(subset=["date", "code"], keep="last")
+    merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(path, index=False)
+    return merged

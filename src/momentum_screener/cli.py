@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from momentum_screener.data import load_or_download_ohlcv, read_tickers
+from momentum_screener.data import load_or_download_ohlcv, read_tickers, refresh_ohlcv_cache
 from momentum_screener.features import (
     FEATURE_COLUMNS,
     OUTPUT_COLUMNS,
@@ -69,6 +69,28 @@ def build_frame(args: argparse.Namespace) -> pd.DataFrame:
     return add_labels(gated, horizon=args.horizon, threshold=args.target_threshold)
 
 
+def resolve_symbols(args: argparse.Namespace) -> list[str]:
+    tickers_file = None if args.no_sample_tickers else args.tickers_file
+    symbols = read_tickers(
+        tickers_file,
+        args.ticker,
+        ticker_universe=args.ticker_universe,
+        code_start=args.code_start,
+        code_end=args.code_end,
+        max_tickers=args.max_tickers,
+        ticker_csv=args.ticker_csv,
+        ticker_csv_code_column=args.ticker_csv_code_column,
+        ticker_csv_market_column=args.ticker_csv_market_column,
+        ticker_csv_include_markets=args.ticker_csv_include_market,
+        ticker_csv_product_column=args.ticker_csv_product_column,
+        ticker_csv_include_products=args.ticker_csv_include_product,
+        ticker_csv_exclude_products=args.ticker_csv_exclude_product,
+    )
+    if not symbols:
+        raise ValueError("No tickers were supplied. Use --tickers-file, --ticker, or --ticker-csv.")
+    return symbols
+
+
 def compute_gate_recall(args: argparse.Namespace, labelled: pd.DataFrame, threshold: float) -> float:
     labelled = labelled.dropna(subset=["future_max_ret_20d"]).copy()
     winners = labelled["future_max_ret_20d"] >= threshold
@@ -104,6 +126,22 @@ def merge_caches_command(args: argparse.Namespace) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     merged.to_csv(output, index=False)
     print(f"rows={len(merged)} symbols={merged['code'].nunique()} output={output}")
+
+
+def refresh_data_command(args: argparse.Namespace) -> None:
+    symbols = resolve_symbols(args)
+    print(f"ticker_count={len(symbols)}")
+    refreshed = refresh_ohlcv_cache(
+        symbols=symbols,
+        start=args.start,
+        end=args.end,
+        cache_path=args.cache,
+        batch_size=args.download_batch_size,
+    )
+    print(
+        f"rows={len(refreshed)} symbols={refreshed['code'].nunique()} "
+        f"min_date={refreshed['date'].min().date()} max_date={refreshed['date'].max().date()} cache={args.cache}"
+    )
 
 
 def build_listed_stocks_command(args: argparse.Namespace) -> None:
@@ -357,6 +395,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_data_args(train)
     add_train_args(train)
     train.set_defaults(func=train_command)
+
+    refresh_data = subparsers.add_parser("refresh-data", help="Refresh OHLCV cache without retraining")
+    add_data_args(refresh_data)
+    refresh_data.set_defaults(func=refresh_data_command)
 
     inspect_gate = subparsers.add_parser("inspect-gate", help="Evaluate gate breadth without training the NN")
     add_data_args(inspect_gate)
