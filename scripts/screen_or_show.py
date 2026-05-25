@@ -68,13 +68,12 @@ def main() -> None:
     update_requested = "--update-data" in sys.argv
     force_requested = "--force" in sys.argv
 
-    if update_requested:
-        print("Updating OHLCV data without retraining the model.", flush=True)
-        update_data()
-
     if is_fresh() and not force_requested:
         print("Existing latest candidates CSV is up to date. Skipping inference.", flush=True)
     else:
+        if update_requested:
+            print("Updating OHLCV data without retraining the model.", flush=True)
+            update_data()
         print("Candidates CSV is missing or stale. Running inference.", flush=True)
         run_screen()
 
