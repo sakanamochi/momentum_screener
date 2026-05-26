@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from momentum_screener.settings import GATE_SETTINGS
+
 
 BASE_FEATURE_COLUMNS = [
     "ret_1d",
@@ -123,11 +125,11 @@ def add_features(
 
 def raw_gate_mask(
     df: pd.DataFrame,
-    min_turnover_5d: float = 100_000_000,
-    min_ret_5d: float = 0.0,
-    min_turnover_ratio_1d_20d: float = 1.2,
-    min_turnover_ratio_5d_20d: float = 1.15,
-    min_close_ma25_ratio: float = 0.0,
+    min_turnover_5d: float = GATE_SETTINGS["min_turnover_5d"],
+    min_ret_5d: float = GATE_SETTINGS["min_ret_5d"],
+    min_turnover_ratio_1d_20d: float = GATE_SETTINGS["min_turnover_ratio_1d_20d"],
+    min_turnover_ratio_5d_20d: float = GATE_SETTINGS["min_turnover_ratio_5d_20d"],
+    min_close_ma25_ratio: float = GATE_SETTINGS["min_close_ma25_ratio"],
 ) -> pd.Series:
     return (
         (df["turnover_5d_avg"] >= min_turnover_5d)
@@ -142,12 +144,12 @@ def raw_gate_mask(
 
 def add_initial_momentum_gate(
     df: pd.DataFrame,
-    cooldown_days: int = 20,
-    min_turnover_5d: float = 100_000_000,
-    min_ret_5d: float = 0.0,
-    min_turnover_ratio_1d_20d: float = 1.2,
-    min_turnover_ratio_5d_20d: float = 1.15,
-    min_close_ma25_ratio: float = 0.0,
+    cooldown_days: int = GATE_SETTINGS["cooldown_days"],
+    min_turnover_5d: float = GATE_SETTINGS["min_turnover_5d"],
+    min_ret_5d: float = GATE_SETTINGS["min_ret_5d"],
+    min_turnover_ratio_1d_20d: float = GATE_SETTINGS["min_turnover_ratio_1d_20d"],
+    min_turnover_ratio_5d_20d: float = GATE_SETTINGS["min_turnover_ratio_5d_20d"],
+    min_close_ma25_ratio: float = GATE_SETTINGS["min_close_ma25_ratio"],
 ) -> pd.DataFrame:
     gated = df.copy()
     gated["raw_initial_momentum"] = raw_gate_mask(

@@ -23,8 +23,8 @@ scripts\screen_latest.bat
 最新候補の見方:
 
 - `最終スコア`: モデルが推定したフォロースルー確率
-- `回数`: 最新日を含む直近6候補日のうち、初動ゲートに入り、かつ `final_score >= 0.55` だった回数
-- `初回日`: 直近6候補日の中で、同じ銘柄が初めて `final_score >= 0.55` になった日
+- `回数`: 最新日を含む直近候補日のうち、初動ゲートに入り、かつ設定スコア閾値以上だった回数
+- `初回日`: 直近候補日の中で、同じ銘柄が初めて設定スコア閾値以上になった日
 - `初回後騰落`: `初回日` の終値から現在株価までの騰落
 - 回数が1の銘柄は、初回日と初回後騰落を空欄表示
 
@@ -78,6 +78,18 @@ https://clientportal.jpx.co.jp/ClientPortal/s/Issue?language=ja
 scripts\inspect_gate.bat
 ```
 
+銘柄コードを指定して、過去に設定スコア閾値を超えた候補日と、翌営業日始値から20営業日後または直近日までの成績を見る場合:
+
+```bat
+scripts\inspect_symbol_history.bat
+```
+
+またはコードを直接渡します。
+
+```bat
+scripts\inspect_symbol_history.bat 285A
+```
+
 PowerShell版とGit Bash版もあります。
 
 ```powershell
@@ -96,6 +108,7 @@ bash scripts/train_evaluation.sh
 
 ## 現在の標準ファイル
 
+- `config/screening_settings.json`: 初動ゲート、ラベル条件、スコア集計閾値の共通設定
 - `config/Issues_20260526020732.csv`: JPXから取得した元の上場銘柄CSV
 - `config/listed_stocks.csv`: 普通株に絞った銘柄リスト
 - `data/ohlcv_current.csv`: 現在のOHLCVキャッシュ
@@ -111,6 +124,9 @@ bash scripts/train_evaluation.sh
 ローリング評価や探索は、通常運用と混ざらないよう `experiments/optimization/` 側で行います。
 
 ## 現在モデルの学習条件
+
+初動ゲート、利確/損切り、スコア集計閾値などの標準値は `config/screening_settings.json` にまとめています。
+値を変える場合は、原則としてこのファイルを更新してから再学習・再推論します。
 
 学習データ:
 
@@ -137,12 +153,16 @@ bash scripts/train_evaluation.sh
 - 同じ日に利確ラインと損切りラインへ両方到達した場合は保守的に失敗扱い
 - `stop_first_rate_at_20/50` は上位20/50件のうち、損切りラインへ先に到達した比率
 
-現在の初動ゲート:
+現在の初動ゲートは `config/screening_settings.json` の `gate` で管理します。
+主な項目:
 
-- `turnover_5d_avg >= 100,000,000`
-- `ret_5d > -0.01`
-- `turnover_ratio_1d_20d >= 1.05` または `turnover_ratio_5d_20d >= 1.05`
-- `close_ma25_ratio >= -0.01`
+- `min_turnover_5d`: 5日平均売買代金の下限
+- `min_ret_5d`: 5日騰落率の下限
+- `min_turnover_ratio_1d_20d`: 当日売買代金倍率の下限
+- `min_turnover_ratio_5d_20d`: 5日平均売買代金倍率の下限
+- `min_close_ma25_ratio`: 25日線乖離率の下限
+
+利確/損切り条件は同じ設定ファイルの `label`、直近回数のスコア閾値は `screen` で管理します。
 
 学習時と推論時の候補扱い:
 
@@ -155,8 +175,8 @@ bash scripts/train_evaluation.sh
 
 - `recent_signal_count`: 出力期間内でraw条件に入った回数
 - `raw_recent_signal_count`: 集計期間内でraw条件に入った回数
-- `score_recent_signal_count`: 集計期間内でraw条件に入り、かつ `final_score >= 0.55` だった回数
-- `first_score_signal_date`: 集計期間内で最初に `final_score >= 0.55` になった日
+- `score_recent_signal_count`: 集計期間内でraw条件に入り、かつ設定スコア閾値以上だった回数
+- `first_score_signal_date`: 集計期間内で最初に設定スコア閾値以上になった日
 - `first_score_signal_close`: `first_score_signal_date` の終値
 - `return_since_first_score_signal`: `first_score_signal_close` から現在株価までの騰落
 

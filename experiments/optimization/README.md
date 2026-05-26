@@ -29,7 +29,7 @@ experiments\optimization\optimize_experiments.bat
 .\.venv\Scripts\python.exe experiments\optimization\optimize_experiments.py --study-name medium_coord --algorithm coordinate --search-size medium --coordinate-passes 2 --epochs 35 --patience 6
 ```
 
-採用済みの出来高下限 `100,000,000` を基準に、周辺パラメータだけを軽く再検証する場合:
+現在の共通設定を基準に、周辺パラメータだけを軽く再検証する場合:
 
 ```powershell
 .\.venv\Scripts\python.exe experiments\optimization\optimize_experiments.py --study-name focused_coord --algorithm coordinate --search-size focused --coordinate-passes 1 --epochs 25 --patience 5
@@ -120,7 +120,7 @@ New-Item outputs\optimization\medium_coord\STOP -ItemType File
 | test p50 | 36.0% | 32.0% |
 | test stop-first p20 | 43.3% | 51.7% |
 
-### 採用した変更
+### 一度採用を検討した変更
 
 `gate_min_turnover_5d` を `50,000,000` から `100,000,000` に変更しました。
 複数条件で、上位候補のヒット率と損切り先行率が安定して改善していたためです。
@@ -154,4 +154,5 @@ New-Item outputs\optimization\medium_coord\STOP -ItemType File
 - `cooldown_days=20` 据え置き
 
 `cooldown_days=10` は test 側で良い場面がありましたが、valid 側が崩れやすいため採用しませんでした。
-今回の結論は、出来高下限だけを `100,000,000` に上げ、その他は据え置きです。
+その後、実際の候補が大型・急騰済み銘柄に寄りすぎる副作用が見えたため、標準運用では `50,000,000` に戻しました。
+この検証結果は、再検討用の記録として残しています。

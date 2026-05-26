@@ -22,6 +22,7 @@ from momentum_screener.features import (
     make_event_dataset,
 )
 from momentum_screener.model import save_artifacts, train_model
+from momentum_screener.settings import GATE_SETTINGS, LABEL_SETTINGS
 
 
 FEATURE_SETS: dict[str, list[str]] = {
@@ -78,13 +79,13 @@ RATIO_PROFILES: dict[str, tuple[float, float]] = {
 
 BASE_CONFIG: dict[str, Any] = {
     "feature_set": "all",
-    "gate_min_turnover_5d": 100_000_000,
-    "gate_min_ret_5d": -0.01,
+    "gate_min_turnover_5d": GATE_SETTINGS["min_turnover_5d"],
+    "gate_min_ret_5d": GATE_SETTINGS["min_ret_5d"],
     "gate_ratio_profile": "current",
-    "gate_min_turnover_ratio_1d_20d": 1.05,
-    "gate_min_turnover_ratio_5d_20d": 1.05,
-    "gate_min_close_ma25_ratio": -0.01,
-    "cooldown_days": 20,
+    "gate_min_turnover_ratio_1d_20d": GATE_SETTINGS["min_turnover_ratio_1d_20d"],
+    "gate_min_turnover_ratio_5d_20d": GATE_SETTINGS["min_turnover_ratio_5d_20d"],
+    "gate_min_close_ma25_ratio": GATE_SETTINGS["min_close_ma25_ratio"],
+    "cooldown_days": GATE_SETTINGS["cooldown_days"],
     "sample_weight_mode": "future_max_ret",
 }
 
@@ -419,10 +420,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--min-events", type=int, default=50)
     parser.add_argument("--fold", action="append", type=parse_rolling_fold)
-    parser.add_argument("--label-mode", choices=["barrier", "max_ret"], default="barrier")
-    parser.add_argument("--profit-barrier", type=float, default=0.15)
-    parser.add_argument("--stop-barrier", type=float, default=-0.10)
-    parser.add_argument("--target-threshold", type=float, default=0.10)
+    parser.add_argument("--label-mode", choices=["barrier", "max_ret"], default=LABEL_SETTINGS["mode"])
+    parser.add_argument("--profit-barrier", type=float, default=LABEL_SETTINGS["profit_barrier"])
+    parser.add_argument("--stop-barrier", type=float, default=LABEL_SETTINGS["stop_barrier"])
+    parser.add_argument("--target-threshold", type=float, default=LABEL_SETTINGS["target_threshold"])
     parser.add_argument("--horizon", type=int, default=20)
     parser.add_argument("--sample-weight-cap", type=float, default=0.30)
     parser.add_argument("--sample-weight-scale", type=float, default=10.0)

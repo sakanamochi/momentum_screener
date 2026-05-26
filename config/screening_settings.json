@@ -1,0 +1,21 @@
+{
+  "gate": {
+    "cooldown_days": 20,
+    "min_turnover_5d": 50000000,
+    "min_ret_5d": -0.01,
+    "min_turnover_ratio_1d_20d": 1.05,
+    "min_turnover_ratio_5d_20d": 1.05,
+    "min_close_ma25_ratio": -0.01
+  },
+  "label": {
+    "mode": "barrier",
+    "horizon": 20,
+    "target_threshold": 0.1,
+    "profit_barrier": 0.15,
+    "stop_barrier": -0.1
+  },
+  "screen": {
+    "signal_count_days": 6,
+    "signal_count_min_score": 0.55
+  }
+}

@@ -19,6 +19,7 @@ from momentum_screener.features import (
     raw_gate_mask,
 )
 from momentum_screener.model import load_artifacts, predict_proba, save_artifacts, train_model
+from momentum_screener.settings import GATE_SETTINGS, LABEL_SETTINGS, SCREEN_SETTINGS
 
 
 def build_frame(args: argparse.Namespace) -> pd.DataFrame:
@@ -503,17 +504,17 @@ def add_data_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--download-batch-size", type=int, default=100)
     parser.add_argument("--shares-csv", default=None, help="Optional CSV with code, shares_outstanding, free_float_shares.")
     parser.add_argument("--refresh", action="store_true", help="Download data even when cache exists.")
-    parser.add_argument("--cooldown-days", type=int, default=20)
-    parser.add_argument("--gate-min-turnover-5d", type=float, default=100_000_000)
-    parser.add_argument("--gate-min-ret-5d", type=float, default=0.0)
-    parser.add_argument("--gate-min-turnover-ratio-1d-20d", type=float, default=1.2)
-    parser.add_argument("--gate-min-turnover-ratio-5d-20d", type=float, default=1.15)
-    parser.add_argument("--gate-min-close-ma25-ratio", type=float, default=0.0)
-    parser.add_argument("--horizon", type=int, default=20)
-    parser.add_argument("--target-threshold", type=float, default=0.10)
-    parser.add_argument("--label-mode", choices=["max_ret", "barrier"], default="max_ret")
-    parser.add_argument("--profit-barrier", type=float, default=0.10)
-    parser.add_argument("--stop-barrier", type=float, default=-0.07)
+    parser.add_argument("--cooldown-days", type=int, default=GATE_SETTINGS["cooldown_days"])
+    parser.add_argument("--gate-min-turnover-5d", type=float, default=GATE_SETTINGS["min_turnover_5d"])
+    parser.add_argument("--gate-min-ret-5d", type=float, default=GATE_SETTINGS["min_ret_5d"])
+    parser.add_argument("--gate-min-turnover-ratio-1d-20d", type=float, default=GATE_SETTINGS["min_turnover_ratio_1d_20d"])
+    parser.add_argument("--gate-min-turnover-ratio-5d-20d", type=float, default=GATE_SETTINGS["min_turnover_ratio_5d_20d"])
+    parser.add_argument("--gate-min-close-ma25-ratio", type=float, default=GATE_SETTINGS["min_close_ma25_ratio"])
+    parser.add_argument("--horizon", type=int, default=LABEL_SETTINGS["horizon"])
+    parser.add_argument("--target-threshold", type=float, default=LABEL_SETTINGS["target_threshold"])
+    parser.add_argument("--label-mode", choices=["max_ret", "barrier"], default=LABEL_SETTINGS["mode"])
+    parser.add_argument("--profit-barrier", type=float, default=LABEL_SETTINGS["profit_barrier"])
+    parser.add_argument("--stop-barrier", type=float, default=LABEL_SETTINGS["stop_barrier"])
     parser.add_argument(
         "--sample-weight-mode",
         choices=["future_max_ret", "target_future_max_ret", "uniform"],
@@ -549,13 +550,13 @@ def add_screen_args(parser: argparse.ArgumentParser, include_model_path: bool = 
     parser.add_argument(
         "--signal-count-days",
         type=int,
-        default=None,
-        help="Use the latest N candidate dates for repeat-signal counts. Defaults to --recent-days.",
+        default=SCREEN_SETTINGS["signal_count_days"],
+        help="Use the latest N candidate dates for repeat-signal counts.",
     )
     parser.add_argument(
         "--signal-count-min-score",
         type=float,
-        default=0.55,
+        default=SCREEN_SETTINGS["signal_count_min_score"],
         help="Only count repeat signals whose final_score is at least this value.",
     )
 

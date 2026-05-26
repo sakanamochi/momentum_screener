@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from momentum_screener.settings import SCREEN_SETTINGS
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "data" / "ohlcv_current.csv"
@@ -11,7 +13,6 @@ MODEL = ROOT / "models" / "momentum_nn_current.pt"
 CANDIDATES = ROOT / "outputs" / "candidates_current.csv"
 RECENT_CANDIDATES = ROOT / "outputs" / "candidates_recent.csv"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-SIGNAL_COUNT_MIN_SCORE = "0.55"
 
 
 def is_fresh() -> bool:
@@ -38,19 +39,9 @@ def screen_command(output: Path, recent_days: int) -> list[str]:
         "--recent-days",
         str(recent_days),
         "--signal-count-days",
-        "6",
-        "--gate-min-turnover-5d",
-        "100000000",
-        "--gate-min-ret-5d",
-        "-0.01",
-        "--gate-min-turnover-ratio-1d-20d",
-        "1.05",
-        "--gate-min-turnover-ratio-5d-20d",
-        "1.05",
-        "--gate-min-close-ma25-ratio",
-        "-0.01",
+        str(SCREEN_SETTINGS["signal_count_days"]),
         "--signal-count-min-score",
-        SIGNAL_COUNT_MIN_SCORE,
+        str(SCREEN_SETTINGS["signal_count_min_score"]),
     ]
 
 
