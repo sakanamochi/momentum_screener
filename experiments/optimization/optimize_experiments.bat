@@ -4,7 +4,7 @@ cd /d "%~dp0\..\.."
 
 call .venv\Scripts\python.exe experiments\optimization\optimize_experiments.py ^
   --cache data\ohlcv_current.csv ^
-  --output-dir outputs\optimization ^
+  --output-dir experiments\outputs\optimization ^
   --search-size small ^
   --max-trials 60 ^
   --epochs 35 ^
@@ -19,5 +19,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo Optimization experiments finished. Check outputs\optimization.
+echo Optimization experiments finished. Check experiments\outputs\optimization.
 pause

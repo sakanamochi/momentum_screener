@@ -1,7 +1,7 @@
 {
   "gate": {
     "cooldown_days": 20,
-    "min_turnover_5d": 50000000,
+    "min_turnover_5d": 30000000,
     "min_ret_5d": -0.01,
     "min_turnover_ratio_1d_20d": 1.05,
     "min_turnover_ratio_5d_20d": 1.05,
@@ -17,5 +17,26 @@
   "screen": {
     "signal_count_days": 6,
     "signal_count_min_score": 0.55
+  },
+  "_description": {
+    "gate": {
+      "cooldown_days": "学習時に同一銘柄の候補を何営業日空けるか。推論時のスコアリングには使わず、学習イベントの重複抑制に使う。",
+      "min_turnover_5d": "初動ゲートに入るための5日平均売買代金の下限。大きくすると流動性の高い大型・話題株寄りになる。",
+      "min_ret_5d": "初動ゲートに入るための5営業日騰落率の下限。-0.01 は -1% 超なら通すという意味。",
+      "min_turnover_ratio_1d_20d": "当日売買代金が20日平均売買代金の何倍以上なら出来高増加とみなすか。",
+      "min_turnover_ratio_5d_20d": "5日平均売買代金が20日平均売買代金の何倍以上なら出来高増加とみなすか。",
+      "min_close_ma25_ratio": "終値の25日移動平均からの乖離率下限。-0.01 は25日線より1%下まで許容するという意味。"
+    },
+    "label": {
+      "mode": "学習ラベルの作り方。barrier は翌営業日始値から利確ラインと損切りラインのどちらに先に到達するかで成功/失敗を作る。",
+      "horizon": "候補日後に何営業日先まで成績を判定するか。",
+      "target_threshold": "mode=max_ret 用の上昇率閾値。mode=barrier では主に gate_recall などの参考指標に使う。",
+      "profit_barrier": "mode=barrier で成功とみなす利確ライン。0.15 は +15%。",
+      "stop_barrier": "mode=barrier で失敗とみなす損切りライン。-0.1 は -10%。"
+    },
+    "screen": {
+      "signal_count_days": "直近シグナル回数を数える候補日の数。最新候補表示ではこの期間内で同じ銘柄が何回出たかを見る。",
+      "signal_count_min_score": "直近シグナル回数や銘柄別履歴に数えるためのスコア閾値。"
+    }
   }
 }

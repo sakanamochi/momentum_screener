@@ -49,11 +49,18 @@ scripts\train_current.bat
 パラメータ変更を時系列分割で確認する場合:
 
 ```bat
-scripts\train_evaluation.bat
+experiments\evaluation\train_evaluation.bat
+```
+
+複数年のローリング評価を行う場合:
+
+```bat
+experiments\evaluation\rolling_evaluation.bat
 ```
 
 パラメータと特徴量セットをまとめて探索する場合は、通常運用と混ざらないよう `experiments/optimization/` を使います。
 実行方法、停止方法、今回の検証結果概要は [experiments/optimization/README.md](experiments/optimization/README.md) にまとめています。
+単発評価とローリング評価の使い方は [experiments/evaluation/README.md](experiments/evaluation/README.md) にまとめています。
 
 JPXの `Issues_*.csv` から普通株リストを再作成する場合:
 
@@ -96,14 +103,16 @@ PowerShell版とGit Bash版もあります。
 .\scripts\screen_latest.ps1
 .\scripts\update_and_screen.ps1
 .\scripts\train_current.ps1
-.\scripts\train_evaluation.ps1
+.\experiments\evaluation\train_evaluation.ps1
+.\experiments\evaluation\rolling_evaluation.ps1
 ```
 
 ```bash
 bash scripts/screen_latest.sh
 bash scripts/update_and_screen.sh
 bash scripts/train_current.sh
-bash scripts/train_evaluation.sh
+bash experiments/evaluation/train_evaluation.sh
+bash experiments/evaluation/rolling_evaluation.sh
 ```
 
 ## 現在の標準ファイル
@@ -112,18 +121,16 @@ bash scripts/train_evaluation.sh
 - `config/Issues_20260526020732.csv`: JPXから取得した元の上場銘柄CSV
 - `config/listed_stocks.csv`: 普通株に絞った銘柄リスト
 - `data/ohlcv_current.csv`: 現在のOHLCVキャッシュ
-- `models/momentum_nn_current.pt`: 画面表示・推論で使う現在モデル。通常は運用モデルと同じ
 - `models/momentum_nn_production.pt`: 運用モデル
 - `outputs/candidates_current.csv`: 現在の候補CSV
 - `outputs/candidates_recent.csv`: 最新日を含む直近6候補日の履歴CSV
-- `outputs/metrics_current.json`: 現在モデルの指標。通常は運用モデルの指標
 - `outputs/metrics_production.json`: 運用モデルの指標
 - `outputs/gate_current.json`: 現在ゲートの確認指標
 
-評価用モデルや評価結果は必要な時だけ `scripts\train_evaluation.bat` で再生成します。
-ローリング評価や探索は、通常運用と混ざらないよう `experiments/optimization/` 側で行います。
+評価用モデルや評価結果は必要な時だけ `experiments\evaluation\` や `experiments\optimization\` 側で再生成します。
+検証で作成されるモデルや結果は `experiments/outputs/<検証名>/` に保存され、通常運用の `outputs/` とは分けています。
 
-## 現在モデルの学習条件
+## 運用モデルの学習条件
 
 初動ゲート、利確/損切り、スコア集計閾値などの標準値は `config/screening_settings.json` にまとめています。
 値を変える場合は、原則としてこのファイルを更新してから再学習・再推論します。
@@ -140,7 +147,7 @@ bash scripts/train_evaluation.sh
 運用モデル:
 
 - ファイル: `models/momentum_nn_production.pt`
-- 推論用エイリアス: `models/momentum_nn_current.pt`
+- 日々の候補表示、データ更新後の推論、銘柄別履歴確認はこのモデルを直接使用
 - 学習範囲: ラベルが作れる最新イベントまで
 - 直近20営業日程度のイベントは、20営業日先の判定がまだできないため学習対象外
 - 運用モデルは未知期間を残さず、使えるデータをなるべく学習に回す本番用
@@ -153,16 +160,8 @@ bash scripts/train_evaluation.sh
 - 同じ日に利確ラインと損切りラインへ両方到達した場合は保守的に失敗扱い
 - `stop_first_rate_at_20/50` は上位20/50件のうち、損切りラインへ先に到達した比率
 
-現在の初動ゲートは `config/screening_settings.json` の `gate` で管理します。
-主な項目:
-
-- `min_turnover_5d`: 5日平均売買代金の下限
-- `min_ret_5d`: 5日騰落率の下限
-- `min_turnover_ratio_1d_20d`: 当日売買代金倍率の下限
-- `min_turnover_ratio_5d_20d`: 5日平均売買代金倍率の下限
-- `min_close_ma25_ratio`: 25日線乖離率の下限
-
-利確/損切り条件は同じ設定ファイルの `label`、直近回数のスコア閾値は `screen` で管理します。
+現在の初動ゲート、利確/損切り条件、直近回数のスコア閾値は `config/screening_settings.json` で管理します。
+各パラメータの意味も同じファイル内の `_description` にまとめています。
 
 学習時と推論時の候補扱い:
 

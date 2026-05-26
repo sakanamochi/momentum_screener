@@ -9,7 +9,7 @@ from momentum_screener.settings import SCREEN_SETTINGS
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "data" / "ohlcv_current.csv"
-MODEL = ROOT / "models" / "momentum_nn_current.pt"
+MODEL = ROOT / "models" / "momentum_nn_production.pt"
 CANDIDATES = ROOT / "outputs" / "candidates_current.csv"
 RECENT_CANDIDATES = ROOT / "outputs" / "candidates_recent.csv"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"

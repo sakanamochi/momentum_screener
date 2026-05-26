@@ -398,7 +398,7 @@ def run_trial(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run isolated parameter and feature-set optimization experiments.")
     parser.add_argument("--cache", default="data/ohlcv_current.csv")
-    parser.add_argument("--output-dir", default="outputs/optimization")
+    parser.add_argument("--output-dir", default="experiments/outputs/optimization")
     parser.add_argument("--study-name", default=None)
     parser.add_argument(
         "--algorithm",

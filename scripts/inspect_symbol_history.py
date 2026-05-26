@@ -13,7 +13,7 @@ from momentum_screener.settings import GATE_SETTINGS, LABEL_SETTINGS, SCREEN_SET
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE = ROOT / "data" / "ohlcv_current.csv"
-DEFAULT_MODEL = ROOT / "models" / "momentum_nn_current.pt"
+DEFAULT_MODEL = ROOT / "models" / "momentum_nn_production.pt"
 DEFAULT_LISTED = ROOT / "config" / "listed_stocks.csv"
 DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "symbol_history"
 

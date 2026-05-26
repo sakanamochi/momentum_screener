@@ -49,7 +49,7 @@ MA25条件とクールダウンだけを確認する場合:
 
 ## 出力
 
-探索結果は `outputs/optimization/<study名>/` に保存されます。この配下は生成物なので、必要な概要を残したら削除して構いません。
+探索結果は `experiments/outputs/optimization/<study名>/` に保存されます。この配下は生成物なので、必要な概要を残したら削除して構いません。
 
 - `config.json`: 探索条件
 - `progress.json`: 現在の進捗、経過時間、推定残り時間、暫定ベスト
@@ -60,19 +60,19 @@ MA25条件とクールダウンだけを確認する場合:
 進捗確認:
 
 ```powershell
-Get-Content outputs\optimization\medium_coord\progress.json
+Get-Content experiments\outputs\optimization\medium_coord\progress.json
 ```
 
 CSV確認:
 
 ```powershell
-start outputs\optimization\medium_coord\trials.csv
+start experiments\outputs\optimization\medium_coord\trials.csv
 ```
 
 途中停止:
 
 ```powershell
-New-Item outputs\optimization\medium_coord\STOP -ItemType File
+New-Item experiments\outputs\optimization\medium_coord\STOP -ItemType File
 ```
 
 `STOP` ファイルを見つけると、実行中のfoldを保存してから次へ進まず終了します。強制終了よりもCSV/JSONが壊れにくい止め方です。

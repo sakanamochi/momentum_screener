@@ -122,8 +122,71 @@ def compute_gate_recall(args: argparse.Namespace, labelled: pd.DataFrame, thresh
     return float((raw_gate & winners).sum() / winners.sum())
 
 
-def write_metrics(metrics: dict[str, float], path: str | Path) -> None:
-    clean = {key: (None if isinstance(value, float) and np.isnan(value) else value) for key, value in metrics.items()}
+def clean_for_json(value):
+    if isinstance(value, dict):
+        return {key: clean_for_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [clean_for_json(item) for item in value]
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    return value
+
+
+def build_training_config(args: argparse.Namespace, feature_columns: list[str]) -> dict:
+    return {
+        "data": {
+            "cache": str(args.cache),
+            "cache_only": bool(args.cache_only),
+            "start": args.start,
+            "end": args.end,
+            "ticker_csv": args.ticker_csv,
+            "ticker_csv_code_column": args.ticker_csv_code_column,
+            "ticker_universe": args.ticker_universe,
+            "code_start": args.code_start,
+            "code_end": args.code_end,
+            "max_tickers": args.max_tickers,
+            "shares_csv": args.shares_csv,
+        },
+        "gate": {
+            "cooldown_days": args.cooldown_days,
+            "min_turnover_5d": args.gate_min_turnover_5d,
+            "min_ret_5d": args.gate_min_ret_5d,
+            "min_turnover_ratio_1d_20d": args.gate_min_turnover_ratio_1d_20d,
+            "min_turnover_ratio_5d_20d": args.gate_min_turnover_ratio_5d_20d,
+            "min_close_ma25_ratio": args.gate_min_close_ma25_ratio,
+        },
+        "label": {
+            "mode": args.label_mode,
+            "horizon": args.horizon,
+            "target_threshold": args.target_threshold,
+            "profit_barrier": args.profit_barrier,
+            "stop_barrier": args.stop_barrier,
+        },
+        "sample_weight": {
+            "mode": args.sample_weight_mode,
+            "cap": args.sample_weight_cap,
+            "scale": args.sample_weight_scale,
+        },
+        "model": {
+            "feature_columns": feature_columns,
+            "train_end": getattr(args, "train_end", None),
+            "valid_end": getattr(args, "valid_end", None),
+            "epochs": getattr(args, "epochs", None),
+            "batch_size": getattr(args, "batch_size", None),
+            "learning_rate": getattr(args, "learning_rate", None),
+            "patience": getattr(args, "patience", None),
+            "seed": getattr(args, "seed", None),
+            "min_events": getattr(args, "min_events", None),
+        },
+    }
+
+
+def write_metrics(metrics: dict, path: str | Path) -> None:
+    clean = clean_for_json(metrics)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -214,6 +277,7 @@ def train_command(args: argparse.Namespace) -> None:
     metrics["sample_weight_mode"] = args.sample_weight_mode
     metrics["sample_weight_cap"] = args.sample_weight_cap
     metrics["sample_weight_scale"] = args.sample_weight_scale
+    metrics["training_config"] = build_training_config(args, feature_columns)
     save_artifacts(result, args.model_path)
     write_metrics(metrics, args.metrics_path)
     print(f"trained_events={len(events)} model={args.model_path} metrics={args.metrics_path}")
@@ -281,6 +345,7 @@ def rolling_eval_command(args: argparse.Namespace) -> None:
             "sample_weight_mode": args.sample_weight_mode,
             "sample_weight_cap": args.sample_weight_cap,
             "sample_weight_scale": args.sample_weight_scale,
+            "training_config": build_training_config(args, feature_columns),
         }
         row.update(metrics)
         rows.append(row)
@@ -292,7 +357,7 @@ def rolling_eval_command(args: argparse.Namespace) -> None:
 
     metrics_path = Path(args.metrics_path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+    metrics_path.write_text(json.dumps(clean_for_json(rows), indent=2, ensure_ascii=False), encoding="utf-8")
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -316,6 +381,7 @@ def inspect_gate_command(args: argparse.Namespace) -> None:
         "event_success_rate": float(events["target_20d"].mean()) if not events.empty else float("nan"),
         "event_avg_future_max_ret_20d": float(events["future_max_ret_20d"].mean()) if not events.empty else float("nan"),
         "gate_recall": compute_gate_recall(args, labelled, args.target_threshold),
+        "training_config": build_training_config(args, feature_columns),
     }
     write_metrics(metrics, args.metrics_path)
     print(json.dumps(metrics, indent=2, ensure_ascii=False))

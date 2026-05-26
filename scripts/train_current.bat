@@ -16,14 +16,12 @@ call .venv\Scripts\python.exe -m momentum_screener.cli run ^
 
 if errorlevel 1 (
   echo.
-  echo Failed to train current model.
+  echo Failed to train production model.
   pause
   exit /b 1
 )
 
 echo.
-copy /Y models\momentum_nn_production.pt models\momentum_nn_current.pt >nul
-copy /Y outputs\metrics_production.json outputs\metrics_current.json >nul
 echo Wrote outputs\candidates_current.csv and outputs\metrics_production.json
 start "" "outputs\candidates_current.csv"
 pause

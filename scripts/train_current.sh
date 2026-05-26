@@ -15,6 +15,3 @@ python_bin=".venv/Scripts/python.exe"
   --epochs 50 \
   --patience 8 \
   --min-events 50
-
-cp models/momentum_nn_production.pt models/momentum_nn_current.pt
-cp outputs/metrics_production.json outputs/metrics_current.json
