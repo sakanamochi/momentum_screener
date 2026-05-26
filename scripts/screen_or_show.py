@@ -40,7 +40,7 @@ def screen_command(output: Path, recent_days: int) -> list[str]:
         "--signal-count-days",
         "6",
         "--gate-min-turnover-5d",
-        "50000000",
+        "100000000",
         "--gate-min-ret-5d",
         "-0.01",
         "--gate-min-turnover-ratio-1d-20d",

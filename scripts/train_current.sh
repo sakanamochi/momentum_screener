@@ -10,7 +10,7 @@ python_bin=".venv/Scripts/python.exe"
   --model-path models/momentum_nn_production.pt \
   --metrics-path outputs/metrics_production.json \
   --output outputs/candidates_current.csv \
-  --gate-min-turnover-5d 50000000 \
+  --gate-min-turnover-5d 100000000 \
   --gate-min-ret-5d -0.01 \
   --gate-min-turnover-ratio-1d-20d 1.05 \
   --gate-min-turnover-ratio-5d-20d 1.05 \

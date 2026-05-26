@@ -52,11 +52,8 @@ scripts\train_current.bat
 scripts\train_evaluation.bat
 ```
 
-複数年で安定性を見るローリング評価を行う場合:
-
-```bat
-scripts\rolling_evaluation_barrier15_10.bat
-```
+パラメータと特徴量セットをまとめて探索する場合は、通常運用と混ざらないよう `experiments/optimization/` を使います。
+実行方法、停止方法、今回の検証結果概要は [experiments/optimization/README.md](experiments/optimization/README.md) にまとめています。
 
 JPXの `Issues_*.csv` から普通株リストを再作成する場合:
 
@@ -110,7 +107,8 @@ bash scripts/train_evaluation.sh
 - `outputs/metrics_production.json`: 運用モデルの指標
 - `outputs/gate_current.json`: 現在ゲートの確認指標
 
-評価用モデルや評価結果は必要な時だけ `scripts\train_evaluation.bat` や `scripts\rolling_evaluation_barrier15_10.bat` で再生成します。
+評価用モデルや評価結果は必要な時だけ `scripts\train_evaluation.bat` で再生成します。
+ローリング評価や探索は、通常運用と混ざらないよう `experiments/optimization/` 側で行います。
 
 ## 現在モデルの学習条件
 
@@ -141,7 +139,7 @@ bash scripts/train_evaluation.sh
 
 現在の初動ゲート:
 
-- `turnover_5d_avg >= 50,000,000`
+- `turnover_5d_avg >= 100,000,000`
 - `ret_5d > -0.01`
 - `turnover_ratio_1d_20d >= 1.05` または `turnover_ratio_5d_20d >= 1.05`
 - `close_ma25_ratio >= -0.01`
@@ -171,6 +169,19 @@ bash scripts/train_evaluation.sh
 - `valid_2025`: `valid_precision_at_20` 0.35
 
 TOPIX proxy特徴量は試しましたが、full版は `valid_2024` が悪化し、相対リターン2本版も地合いなしを上回らなかったため、現時点では採用していません。
+
+学習時のサンプル重み:
+
+- 標準は `--sample-weight-mode future_max_ret`
+- 従来どおり、将来最大上昇率を `0%` から `30%` の範囲で重みに反映します
+- `--sample-weight-mode target_future_max_ret` を指定すると、成功ラベルのイベントだけ将来最大上昇率で重くします
+- `--sample-weight-mode uniform` を指定すると、全イベントを同じ重みで学習します
+
+重み付け比較メモ:
+
+- `target_future_max_ret` は、失敗ラベルなのに一時的な高騰だけで重くなる問題を避ける案です
+- ローリング評価では `test_precision_at_50` は改善しましたが、`valid_precision_at_20` と `stop_first_rate` が悪化しました
+- 現時点では本モデルには適用せず、標準の `future_max_ret` を維持します
 
 ## セットアップ
 

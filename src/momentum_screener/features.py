@@ -169,7 +169,36 @@ def add_initial_momentum_gate(
     return gated
 
 
-def _add_max_return_labels(df: pd.DataFrame, horizon: int, threshold: float) -> pd.DataFrame:
+def add_sample_weights(
+    labelled: pd.DataFrame,
+    mode: str = "future_max_ret",
+    cap: float = 0.30,
+    scale: float = 10.0,
+) -> pd.DataFrame:
+    weighted = labelled.copy()
+    if mode == "uniform":
+        weighted["sample_weight"] = 1.0
+        return weighted
+
+    clipped_return = weighted["future_max_ret_20d"].clip(lower=0, upper=cap).fillna(0.0)
+    if mode == "future_max_ret":
+        weighted["sample_weight"] = 1.0 + clipped_return * scale
+        return weighted
+    if mode == "target_future_max_ret":
+        target = weighted["target_20d"].fillna(0.0).clip(lower=0.0, upper=1.0)
+        weighted["sample_weight"] = 1.0 + clipped_return * scale * target
+        return weighted
+    raise ValueError(f"Unknown sample_weight_mode: {mode}")
+
+
+def _add_max_return_labels(
+    df: pd.DataFrame,
+    horizon: int,
+    threshold: float,
+    sample_weight_mode: str,
+    sample_weight_cap: float,
+    sample_weight_scale: float,
+) -> pd.DataFrame:
     labelled = df.copy()
 
     def future_max(high: pd.Series) -> pd.Series:
@@ -183,8 +212,12 @@ def _add_max_return_labels(df: pd.DataFrame, horizon: int, threshold: float) -> 
     labelled["hit_stop_day"] = np.nan
     labelled["target_20d"] = (labelled["future_max_ret_20d"] >= threshold).astype(float)
     labelled.loc[labelled["future_max_ret_20d"].isna(), "target_20d"] = np.nan
-    labelled["sample_weight"] = 1.0 + labelled["future_max_ret_20d"].clip(lower=0, upper=0.30) * 10.0
-    return labelled
+    return add_sample_weights(
+        labelled,
+        mode=sample_weight_mode,
+        cap=sample_weight_cap,
+        scale=sample_weight_scale,
+    )
 
 
 def _add_barrier_labels(
@@ -192,6 +225,9 @@ def _add_barrier_labels(
     horizon: int,
     profit_barrier: float,
     stop_barrier: float,
+    sample_weight_mode: str,
+    sample_weight_cap: float,
+    sample_weight_scale: float,
 ) -> pd.DataFrame:
     labelled = df.copy()
     labelled["entry_price"] = np.nan
@@ -255,8 +291,12 @@ def _add_barrier_labels(
             labelled.at[row_idx, "hit_stop_day"] = hit_stop_day
             labelled.at[row_idx, "target_20d"] = target
 
-    labelled["sample_weight"] = 1.0 + labelled["future_max_ret_20d"].clip(lower=0, upper=0.30) * 10.0
-    return labelled
+    return add_sample_weights(
+        labelled,
+        mode=sample_weight_mode,
+        cap=sample_weight_cap,
+        scale=sample_weight_scale,
+    )
 
 
 def add_labels(
@@ -266,15 +306,28 @@ def add_labels(
     label_mode: str = "max_ret",
     profit_barrier: float = 0.10,
     stop_barrier: float = -0.07,
+    sample_weight_mode: str = "future_max_ret",
+    sample_weight_cap: float = 0.30,
+    sample_weight_scale: float = 10.0,
 ) -> pd.DataFrame:
     if label_mode == "max_ret":
-        return _add_max_return_labels(df, horizon=horizon, threshold=threshold)
+        return _add_max_return_labels(
+            df,
+            horizon=horizon,
+            threshold=threshold,
+            sample_weight_mode=sample_weight_mode,
+            sample_weight_cap=sample_weight_cap,
+            sample_weight_scale=sample_weight_scale,
+        )
     if label_mode == "barrier":
         return _add_barrier_labels(
             df,
             horizon=horizon,
             profit_barrier=profit_barrier,
             stop_barrier=stop_barrier,
+            sample_weight_mode=sample_weight_mode,
+            sample_weight_cap=sample_weight_cap,
+            sample_weight_scale=sample_weight_scale,
         )
     raise ValueError(f"Unknown label_mode: {label_mode}")
 

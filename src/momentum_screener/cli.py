@@ -73,6 +73,9 @@ def build_frame(args: argparse.Namespace) -> pd.DataFrame:
         label_mode=args.label_mode,
         profit_barrier=args.profit_barrier,
         stop_barrier=args.stop_barrier,
+        sample_weight_mode=args.sample_weight_mode,
+        sample_weight_cap=args.sample_weight_cap,
+        sample_weight_scale=args.sample_weight_scale,
     )
 
 
@@ -207,6 +210,9 @@ def train_command(args: argparse.Namespace) -> None:
     metrics["profit_barrier"] = args.profit_barrier
     metrics["stop_barrier"] = args.stop_barrier
     metrics["target_threshold"] = args.target_threshold
+    metrics["sample_weight_mode"] = args.sample_weight_mode
+    metrics["sample_weight_cap"] = args.sample_weight_cap
+    metrics["sample_weight_scale"] = args.sample_weight_scale
     save_artifacts(result, args.model_path)
     write_metrics(metrics, args.metrics_path)
     print(f"trained_events={len(events)} model={args.model_path} metrics={args.metrics_path}")
@@ -271,6 +277,9 @@ def rolling_eval_command(args: argparse.Namespace) -> None:
             "profit_barrier": args.profit_barrier,
             "stop_barrier": args.stop_barrier,
             "target_threshold": args.target_threshold,
+            "sample_weight_mode": args.sample_weight_mode,
+            "sample_weight_cap": args.sample_weight_cap,
+            "sample_weight_scale": args.sample_weight_scale,
         }
         row.update(metrics)
         rows.append(row)
@@ -505,6 +514,17 @@ def add_data_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--label-mode", choices=["max_ret", "barrier"], default="max_ret")
     parser.add_argument("--profit-barrier", type=float, default=0.10)
     parser.add_argument("--stop-barrier", type=float, default=-0.07)
+    parser.add_argument(
+        "--sample-weight-mode",
+        choices=["future_max_ret", "target_future_max_ret", "uniform"],
+        default="future_max_ret",
+        help=(
+            "Training sample weighting. future_max_ret is the legacy behavior; "
+            "target_future_max_ret weights only successful labels by future max return."
+        ),
+    )
+    parser.add_argument("--sample-weight-cap", type=float, default=0.30)
+    parser.add_argument("--sample-weight-scale", type=float, default=10.0)
 
 
 def add_train_args(parser: argparse.ArgumentParser) -> None:
