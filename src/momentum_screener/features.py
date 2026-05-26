@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-FEATURE_COLUMNS = [
+BASE_FEATURE_COLUMNS = [
     "ret_1d",
     "ret_5d",
     "ret_20d",
@@ -25,6 +25,8 @@ FEATURE_COLUMNS = [
     "share_turnover_5d",
     "float_turnover_5d",
 ]
+
+FEATURE_COLUMNS = BASE_FEATURE_COLUMNS
 
 OUTPUT_COLUMNS = [
     "date",
@@ -156,26 +158,127 @@ def add_initial_momentum_gate(
     return gated
 
 
-def add_labels(df: pd.DataFrame, horizon: int = 20, threshold: float = 0.10) -> pd.DataFrame:
+def _add_max_return_labels(df: pd.DataFrame, horizon: int, threshold: float) -> pd.DataFrame:
     labelled = df.copy()
 
     def future_max(high: pd.Series) -> pd.Series:
         return high.iloc[::-1].rolling(horizon, min_periods=horizon).max().iloc[::-1].shift(-1)
 
     labelled["future_high_20d"] = labelled.groupby("code", group_keys=False)["high"].transform(future_max)
+    labelled["entry_price"] = labelled["close"]
     labelled["future_max_ret_20d"] = labelled["future_high_20d"] / labelled["close"] - 1.0
+    labelled["future_min_ret_20d"] = np.nan
+    labelled["hit_profit_day"] = np.nan
+    labelled["hit_stop_day"] = np.nan
     labelled["target_20d"] = (labelled["future_max_ret_20d"] >= threshold).astype(float)
     labelled.loc[labelled["future_max_ret_20d"].isna(), "target_20d"] = np.nan
     labelled["sample_weight"] = 1.0 + labelled["future_max_ret_20d"].clip(lower=0, upper=0.30) * 10.0
     return labelled
 
 
-def make_event_dataset(df: pd.DataFrame, require_label: bool = True) -> pd.DataFrame:
+def _add_barrier_labels(
+    df: pd.DataFrame,
+    horizon: int,
+    profit_barrier: float,
+    stop_barrier: float,
+) -> pd.DataFrame:
+    labelled = df.copy()
+    labelled["entry_price"] = np.nan
+    labelled["future_high_20d"] = np.nan
+    labelled["future_low_20d"] = np.nan
+    labelled["future_max_ret_20d"] = np.nan
+    labelled["future_min_ret_20d"] = np.nan
+    labelled["hit_profit_day"] = np.nan
+    labelled["hit_stop_day"] = np.nan
+    labelled["target_20d"] = np.nan
+
+    for _, group in labelled.groupby("code", sort=False):
+        idx = group.index.to_numpy()
+        opens = group["open"].to_numpy(dtype=float)
+        highs = group["high"].to_numpy(dtype=float)
+        lows = group["low"].to_numpy(dtype=float)
+        if "raw_initial_momentum" in group.columns:
+            candidate_positions = np.flatnonzero(group["raw_initial_momentum"].to_numpy(dtype=bool))
+        else:
+            candidate_positions = np.arange(len(group))
+        n = len(group)
+
+        for position in candidate_positions:
+            entry_position = position + 1
+            end_position = min(position + horizon, n - 1)
+            if entry_position > end_position:
+                continue
+
+            entry = opens[entry_position]
+            if not np.isfinite(entry) or entry <= 0:
+                continue
+
+            future_highs = highs[entry_position : end_position + 1]
+            future_lows = lows[entry_position : end_position + 1]
+            if len(future_highs) < horizon:
+                continue
+
+            max_ret = np.nanmax(future_highs) / entry - 1.0
+            min_ret = np.nanmin(future_lows) / entry - 1.0
+            profit_hit = future_highs / entry - 1.0 >= profit_barrier
+            stop_hit = future_lows / entry - 1.0 <= stop_barrier
+
+            hit_profit_day = np.nan
+            hit_stop_day = np.nan
+            if np.any(profit_hit):
+                hit_profit_day = float(np.argmax(profit_hit) + 1)
+            if np.any(stop_hit):
+                hit_stop_day = float(np.argmax(stop_hit) + 1)
+
+            target = 0.0
+            if np.isfinite(hit_profit_day) and (not np.isfinite(hit_stop_day) or hit_profit_day < hit_stop_day):
+                target = 1.0
+
+            row_idx = idx[position]
+            labelled.at[row_idx, "entry_price"] = entry
+            labelled.at[row_idx, "future_high_20d"] = np.nanmax(future_highs)
+            labelled.at[row_idx, "future_low_20d"] = np.nanmin(future_lows)
+            labelled.at[row_idx, "future_max_ret_20d"] = max_ret
+            labelled.at[row_idx, "future_min_ret_20d"] = min_ret
+            labelled.at[row_idx, "hit_profit_day"] = hit_profit_day
+            labelled.at[row_idx, "hit_stop_day"] = hit_stop_day
+            labelled.at[row_idx, "target_20d"] = target
+
+    labelled["sample_weight"] = 1.0 + labelled["future_max_ret_20d"].clip(lower=0, upper=0.30) * 10.0
+    return labelled
+
+
+def add_labels(
+    df: pd.DataFrame,
+    horizon: int = 20,
+    threshold: float = 0.10,
+    label_mode: str = "max_ret",
+    profit_barrier: float = 0.10,
+    stop_barrier: float = -0.07,
+) -> pd.DataFrame:
+    if label_mode == "max_ret":
+        return _add_max_return_labels(df, horizon=horizon, threshold=threshold)
+    if label_mode == "barrier":
+        return _add_barrier_labels(
+            df,
+            horizon=horizon,
+            profit_barrier=profit_barrier,
+            stop_barrier=stop_barrier,
+        )
+    raise ValueError(f"Unknown label_mode: {label_mode}")
+
+
+def make_event_dataset(
+    df: pd.DataFrame,
+    require_label: bool = True,
+    feature_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    feature_columns = feature_columns or FEATURE_COLUMNS
     events = df[df["initial_momentum"]].copy()
     if require_label:
         events = events.dropna(subset=["target_20d", "sample_weight"])
     events = events.replace([np.inf, -np.inf], np.nan)
-    events = events.dropna(subset=FEATURE_COLUMNS)
+    events = events.dropna(subset=feature_columns)
     return events.reset_index(drop=True)
 
 

@@ -18,6 +18,9 @@ $output = "outputs\candidates_current.csv"
   --gate-min-turnover-ratio-1d-20d 1.05 `
   --gate-min-turnover-ratio-5d-20d 1.05 `
   --gate-min-close-ma25-ratio -0.01 `
+  --label-mode barrier `
+  --profit-barrier 0.15 `
+  --stop-barrier -0.10 `
   --train-end 2099-12-31 `
   --valid-end 2099-12-31 `
   --epochs 50 `

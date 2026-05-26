@@ -163,6 +163,28 @@ def precision_at_n(frame: pd.DataFrame, n: int) -> float:
     return float(top["target_20d"].mean())
 
 
+def stop_first_rate_at_n(frame: pd.DataFrame, n: int) -> float:
+    if frame.empty or "hit_stop_day" not in frame.columns or "hit_profit_day" not in frame.columns:
+        return float("nan")
+    top = frame.sort_values("follow_through_prob", ascending=False).head(n)
+    if top.empty:
+        return float("nan")
+    hit_stop = top["hit_stop_day"].notna()
+    hit_profit = top["hit_profit_day"].notna()
+    stop_first = hit_stop & (~hit_profit | (top["hit_stop_day"] <= top["hit_profit_day"]))
+    return float(stop_first.mean())
+
+
+def avg_days_to_profit_at_n(frame: pd.DataFrame, n: int) -> float:
+    if frame.empty or "hit_profit_day" not in frame.columns:
+        return float("nan")
+    top = frame.sort_values("follow_through_prob", ascending=False).head(n)
+    profit_days = top.loc[top["hit_profit_day"].notna(), "hit_profit_day"]
+    if profit_days.empty:
+        return float("nan")
+    return float(profit_days.mean())
+
+
 def evaluate_splits(
     model: MomentumNet,
     scaler: SimpleScaler,
@@ -179,6 +201,10 @@ def evaluate_splits(
         metrics[f"{name}_events"] = float(len(scored))
         metrics[f"{name}_precision_at_20"] = precision_at_n(scored, 20)
         metrics[f"{name}_precision_at_50"] = precision_at_n(scored, 50)
+        metrics[f"{name}_stop_first_rate_at_20"] = stop_first_rate_at_n(scored, 20)
+        metrics[f"{name}_stop_first_rate_at_50"] = stop_first_rate_at_n(scored, 50)
+        metrics[f"{name}_avg_days_to_profit_at_20"] = avg_days_to_profit_at_n(scored, 20)
+        metrics[f"{name}_avg_days_to_profit_at_50"] = avg_days_to_profit_at_n(scored, 50)
         top20 = scored.sort_values("follow_through_prob", ascending=False).head(20)
         metrics[f"{name}_avg_future_max_ret_at_20"] = float(top20["future_max_ret_20d"].mean()) if not top20.empty else float("nan")
     return metrics

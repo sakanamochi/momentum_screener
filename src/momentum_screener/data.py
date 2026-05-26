@@ -210,6 +210,13 @@ def refresh_ohlcv_cache(
             start = max(max_date - pd.Timedelta(days=10), pd.Timestamp(start)).strftime("%Y-%m-%d")
 
     latest = download_ohlcv(symbols, start=start, end=end, batch_size=batch_size)
+    if latest.empty:
+        if existing.empty:
+            return existing
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing.to_csv(path, index=False)
+        return existing
+
     merged = pd.concat([existing, latest], ignore_index=True)
     merged = merged.drop_duplicates(subset=["date", "code"], keep="last")
     merged = merged.sort_values(["code", "date"]).reset_index(drop=True)

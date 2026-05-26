@@ -66,7 +66,18 @@ def build_frame(args: argparse.Namespace) -> pd.DataFrame:
         min_turnover_ratio_5d_20d=args.gate_min_turnover_ratio_5d_20d,
         min_close_ma25_ratio=args.gate_min_close_ma25_ratio,
     )
-    return add_labels(gated, horizon=args.horizon, threshold=args.target_threshold)
+    return add_labels(
+        gated,
+        horizon=args.horizon,
+        threshold=args.target_threshold,
+        label_mode=args.label_mode,
+        profit_barrier=args.profit_barrier,
+        stop_barrier=args.stop_barrier,
+    )
+
+
+def get_feature_columns(args: argparse.Namespace) -> list[str]:
+    return FEATURE_COLUMNS
 
 
 def resolve_symbols(args: argparse.Namespace) -> list[str]:
@@ -142,8 +153,6 @@ def refresh_data_command(args: argparse.Namespace) -> None:
         f"rows={len(refreshed)} symbols={refreshed['code'].nunique()} "
         f"min_date={refreshed['date'].min().date()} max_date={refreshed['date'].max().date()} cache={args.cache}"
     )
-
-
 def build_listed_stocks_command(args: argparse.Namespace) -> None:
     df = pd.read_csv(args.input, dtype=str, encoding=args.encoding)
     required = ["銘柄コード", "国内外区分", "商品分類", "市場区分", "東証上場廃止日"]
@@ -170,7 +179,8 @@ def build_listed_stocks_command(args: argparse.Namespace) -> None:
 
 def train_command(args: argparse.Namespace) -> None:
     labelled = build_frame(args)
-    events = make_event_dataset(labelled, require_label=True)
+    feature_columns = get_feature_columns(args)
+    events = make_event_dataset(labelled, require_label=True, feature_columns=feature_columns)
     if len(events) < args.min_events:
         raise ValueError(
             f"Only {len(events)} labelled events were created. "
@@ -179,7 +189,7 @@ def train_command(args: argparse.Namespace) -> None:
 
     result, metrics = train_model(
         events=events,
-        feature_columns=FEATURE_COLUMNS,
+        feature_columns=feature_columns,
         train_end=args.train_end,
         valid_end=args.valid_end,
         epochs=args.epochs,
@@ -193,14 +203,97 @@ def train_command(args: argparse.Namespace) -> None:
     metrics["raw_gate_rows"] = float(labelled["raw_initial_momentum"].sum())
     metrics["initial_momentum_events"] = float(labelled["initial_momentum"].sum())
     metrics["symbols_with_ohlcv"] = float(labelled["code"].nunique())
+    metrics["label_mode"] = args.label_mode
+    metrics["profit_barrier"] = args.profit_barrier
+    metrics["stop_barrier"] = args.stop_barrier
+    metrics["target_threshold"] = args.target_threshold
     save_artifacts(result, args.model_path)
     write_metrics(metrics, args.metrics_path)
     print(f"trained_events={len(events)} model={args.model_path} metrics={args.metrics_path}")
 
 
+def parse_rolling_fold(value: str) -> tuple[str, str, str]:
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) == 2:
+        train_end, valid_end = parts
+        name = f"train_to_{train_end}_valid_to_{valid_end}"
+    elif len(parts) == 3:
+        name, train_end, valid_end = parts
+    else:
+        raise argparse.ArgumentTypeError("Use --fold NAME,TRAIN_END,VALID_END or --fold TRAIN_END,VALID_END.")
+    if not train_end or not valid_end:
+        raise argparse.ArgumentTypeError("TRAIN_END and VALID_END are required.")
+    return name, train_end, valid_end
+
+
+def default_rolling_folds() -> list[tuple[str, str, str]]:
+    return [
+        ("valid_2023", "2022-12-31", "2023-12-31"),
+        ("valid_2024", "2023-12-31", "2024-12-31"),
+        ("valid_2025", "2024-12-31", "2025-12-31"),
+    ]
+
+
+def rolling_eval_command(args: argparse.Namespace) -> None:
+    labelled = build_frame(args)
+    feature_columns = get_feature_columns(args)
+    events = make_event_dataset(labelled, require_label=True, feature_columns=feature_columns)
+    if len(events) < args.min_events:
+        raise ValueError(
+            f"Only {len(events)} labelled events were created. "
+            f"Add more tickers/history or lower --min-events for a smoke test."
+        )
+
+    folds = args.fold or default_rolling_folds()
+    rows = []
+    for fold_name, train_end, valid_end in folds:
+        _, metrics = train_model(
+            events=events,
+            feature_columns=feature_columns,
+            train_end=train_end,
+            valid_end=valid_end,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            patience=args.patience,
+            seed=args.seed,
+        )
+        row = {
+            "fold": fold_name,
+            "train_end": train_end,
+            "valid_end": valid_end,
+            "all_events": float(len(events)),
+            "gate_recall": compute_gate_recall(args, labelled, args.target_threshold),
+            "raw_gate_rows": float(labelled["raw_initial_momentum"].sum()),
+            "initial_momentum_events": float(labelled["initial_momentum"].sum()),
+            "symbols_with_ohlcv": float(labelled["code"].nunique()),
+            "label_mode": args.label_mode,
+            "profit_barrier": args.profit_barrier,
+            "stop_barrier": args.stop_barrier,
+            "target_threshold": args.target_threshold,
+        }
+        row.update(metrics)
+        rows.append(row)
+        print(
+            f"fold={fold_name} train_end={train_end} valid_end={valid_end} "
+            f"valid_p20={row.get('valid_precision_at_20')} valid_p50={row.get('valid_precision_at_50')} "
+            f"test_p20={row.get('test_precision_at_20')} test_p50={row.get('test_precision_at_50')}"
+        )
+
+    metrics_path = Path(args.metrics_path)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+    print(f"folds={len(rows)} metrics={metrics_path} output={output_path}")
+
+
 def inspect_gate_command(args: argparse.Namespace) -> None:
     labelled = build_frame(args)
-    events = make_event_dataset(labelled, require_label=True)
+    feature_columns = get_feature_columns(args)
+    events = make_event_dataset(labelled, require_label=True, feature_columns=feature_columns)
     labelled_with_future = labelled.dropna(subset=["future_max_ret_20d"])
     winners = labelled_with_future["future_max_ret_20d"] >= args.target_threshold
     metrics = {
@@ -221,7 +314,8 @@ def inspect_gate_command(args: argparse.Namespace) -> None:
 
 def screen_command(args: argparse.Namespace) -> None:
     labelled = build_frame(args)
-    candidates = make_event_dataset(labelled, require_label=False)
+    feature_columns = get_feature_columns(args)
+    candidates = make_event_dataset(labelled, require_label=False, feature_columns=feature_columns)
     if args.as_of:
         as_of = pd.Timestamp(args.as_of)
         candidates = candidates[candidates["date"] == as_of].copy()
@@ -256,7 +350,8 @@ def inspect_symbols_command(args: argparse.Namespace) -> None:
     if rows.empty:
         raise ValueError(f"No rows found for: {symbols}")
 
-    events = make_event_dataset(rows, require_label=False)
+    feature_columns = get_feature_columns(args)
+    events = make_event_dataset(rows, require_label=False, feature_columns=feature_columns)
     model = scaler = feature_columns = None
     if args.model_path:
         model, scaler, feature_columns = load_artifacts(args.model_path)
@@ -353,6 +448,9 @@ def add_data_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--gate-min-close-ma25-ratio", type=float, default=0.0)
     parser.add_argument("--horizon", type=int, default=20)
     parser.add_argument("--target-threshold", type=float, default=0.10)
+    parser.add_argument("--label-mode", choices=["max_ret", "barrier"], default="max_ret")
+    parser.add_argument("--profit-barrier", type=float, default=0.10)
+    parser.add_argument("--stop-barrier", type=float, default=-0.07)
 
 
 def add_train_args(parser: argparse.ArgumentParser) -> None:
@@ -395,6 +493,18 @@ def build_parser() -> argparse.ArgumentParser:
     add_data_args(train)
     add_train_args(train)
     train.set_defaults(func=train_command)
+
+    rolling_eval = subparsers.add_parser("rolling-eval", help="Train/evaluate repeated time-based folds")
+    add_data_args(rolling_eval)
+    add_train_args(rolling_eval)
+    rolling_eval.add_argument(
+        "--fold",
+        action="append",
+        type=parse_rolling_fold,
+        help="Evaluation fold as NAME,TRAIN_END,VALID_END. Defaults to valid_2023/2024/2025.",
+    )
+    rolling_eval.add_argument("--output", default="outputs/rolling_evaluation.csv")
+    rolling_eval.set_defaults(func=rolling_eval_command)
 
     refresh_data = subparsers.add_parser("refresh-data", help="Refresh OHLCV cache without retraining")
     add_data_args(refresh_data)

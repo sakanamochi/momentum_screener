@@ -1,12 +1,12 @@
 # momentum_screener
 
-日本株の初動モメンタム候補を抽出し、既存のニューラルネットワークモデルで「20営業日以内にさらに伸びる確率」を推定する個人用スクリーニングツールです。
+日本株の初動モメンタム候補を抽出し、ニューラルネットワークで「翌営業日始値から20営業日以内に+15%へ先に到達し、-10%へ先に到達しない確率」を推定する個人用スクリーニングツールです。
 
 これは投資助言ではなく、検証用の候補抽出ツールです。
 
 ## 通常の使い方
 
-基本はこのbatだけ使います。
+候補を表示する場合:
 
 ```bat
 scripts\screen_latest.bat
@@ -29,7 +29,7 @@ scripts\update_and_screen.bat
 
 ## たまに使う操作
 
-モデルを再学習する場合:
+運用モデルを再学習する場合:
 
 ```bat
 scripts\train_current.bat
@@ -37,13 +37,17 @@ scripts\train_current.bat
 
 再学習は毎日行う想定ではありません。銘柄リストを更新した時、ゲート条件や特徴量を変えた時、または月1回程度の見直し用です。
 
-パラメータ変更を評価用の時系列分割で確認する場合:
+パラメータ変更を時系列分割で確認する場合:
 
 ```bat
 scripts\train_evaluation.bat
 ```
 
-評価用モデルは運用には使わず、`outputs/metrics_evaluation.json` で比較するためのものです。
+複数年で安定性を見るローリング評価を行う場合:
+
+```bat
+scripts\rolling_evaluation_barrier15_10.bat
+```
 
 JPXの `Issues_*.csv` から普通株リストを再作成する場合:
 
@@ -67,12 +71,14 @@ PowerShell版とGit Bash版もあります。
 .\scripts\screen_latest.ps1
 .\scripts\update_and_screen.ps1
 .\scripts\train_current.ps1
+.\scripts\train_evaluation.ps1
 ```
 
 ```bash
 bash scripts/screen_latest.sh
 bash scripts/update_and_screen.sh
 bash scripts/train_current.sh
+bash scripts/train_evaluation.sh
 ```
 
 ## 現在の標準ファイル
@@ -81,15 +87,13 @@ bash scripts/train_current.sh
 - `config/listed_stocks.csv`: 普通株に絞った銘柄リスト
 - `data/ohlcv_current.csv`: 現在のOHLCVキャッシュ
 - `models/momentum_nn_current.pt`: 画面表示・推論で使う現在モデル。通常は運用モデルと同じ
-- `models/momentum_nn_production.pt`: 運用モデル。ラベル作成可能な最新イベントまで学習
-- `models/momentum_nn_evaluation.pt`: 評価用モデル。時系列分割でパラメータ比較用
+- `models/momentum_nn_production.pt`: 運用モデル
 - `outputs/candidates_current.csv`: 現在の候補CSV
 - `outputs/metrics_current.json`: 現在モデルの指標。通常は運用モデルの指標
 - `outputs/metrics_production.json`: 運用モデルの指標
-- `outputs/metrics_evaluation.json`: 評価用モデルの指標
 - `outputs/gate_current.json`: 現在ゲートの確認指標
 
-開発途中の一時CSVや実験モデルは削除済みです。
+評価用モデルや評価結果は必要な時だけ `scripts\train_evaluation.bat` や `scripts\rolling_evaluation_barrier15_10.bat` で再生成します。
 
 ## 現在モデルの学習条件
 
@@ -101,36 +105,22 @@ bash scripts/train_current.sh
 - OHLCV期間: `2020-01-06` から `2026-05-25`
 - OHLCV取得銘柄数: `3,728`
 - OHLCV行数: `5,388,274`
-- 学習イベント数: `99,417`
 
 運用モデル:
 
 - ファイル: `models/momentum_nn_production.pt`
 - 推論用エイリアス: `models/momentum_nn_current.pt`
 - 学習範囲: ラベルが作れる最新イベントまで
-- 現在の学習イベント数: `99,417`
-- 現在保存されている運用モデルはこの条件で再学習済み
-- `future_max_ret_20d` の計算に20営業日先が必要なため、直近20営業日程度のイベントは学習対象外
-
-運用モデルは未知期間を残さず、使えるデータをなるべく学習に回す本番用です。指標の `valid` は早期停止確認用であり、厳密な将来評価ではありません。
-
-評価用モデル:
-
-- ファイル: `models/momentum_nn_evaluation.pt`
-- 用途: パラメータ変更や特徴量変更の比較
-- 運用推論には使わない
-
-評価用モデルの時系列分割:
-
-- train: `2020-01-06` から `2023-12-31`
-- valid: `2024-01-01` から `2024-12-31`
-- test: `2025-01-01` 以降
+- 直近20営業日程度のイベントは、20営業日先の判定がまだできないため学習対象外
+- 運用モデルは未知期間を残さず、使えるデータをなるべく学習に回す本番用
+- 指標の `valid` は早期停止確認用であり、厳密な将来評価ではありません
 
 ラベル:
 
-- 候補日の翌営業日から20営業日以内の最大上昇率を使用
-- `target_20d = 1` は `future_max_ret_20d >= 0.10`
-- 学習時は `sample_weight = 1.0 + clip(future_max_ret_20d, 0, 0.30) * 10`
+- 候補日の翌営業日始値をエントリー価格として使用
+- 20営業日以内に `+15%` へ先に到達し、`-10%` へ先に到達しない場合を成功
+- 同じ日に利確ラインと損切りラインへ両方到達した場合は保守的に失敗扱い
+- `stop_first_rate_at_20/50` は上位20/50件のうち、損切りラインへ先に到達した比率
 
 現在の初動ゲート:
 
@@ -140,26 +130,15 @@ bash scripts/train_current.sh
 - `close_ma25_ratio >= -0.01`
 - 同一銘柄の候補は20営業日クールダウン
 
-現在の運用モデルの指標概要:
+## 評価メモ
 
-- `train_events`: 99,417
-- `valid_events`: 19,883
-- `test_events`: 0
-- `train_precision_at_20`: 0.90
-- `train_precision_at_50`: 0.88
-- `valid_precision_at_20`: 0.80
-- `valid_precision_at_50`: 0.80
-- `gate_recall`: 0.1659
+`+15% / -10%` ローリング評価:
 
-現在の評価用モデルの指標概要:
+- `valid_2023`: `valid_precision_at_20` 0.30
+- `valid_2024`: `valid_precision_at_20` 0.45
+- `valid_2025`: `valid_precision_at_20` 0.35
 
-- `train_events`: 57,357
-- `valid_events`: 17,255
-- `test_events`: 24,805
-- `test_precision_at_20`: 0.95
-- `test_precision_at_50`: 0.82
-
-詳細は `outputs/metrics_current.json`, `outputs/metrics_production.json`, `outputs/metrics_evaluation.json`, `outputs/gate_current.json` を確認してください。
+TOPIX proxy特徴量は試しましたが、full版は `valid_2024` が悪化し、相対リターン2本版も地合いなしを上回らなかったため、現時点では採用していません。
 
 ## セットアップ
 
