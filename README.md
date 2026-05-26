@@ -15,9 +15,18 @@ scripts\screen_latest.bat
 動き:
 
 - 既存の `outputs/candidates_current.csv` が最新なら、再推論せずに即表示
-- CSVが無い、またはモデル/データより古い場合だけ、既存モデルで再推論
-- 画面には `銘柄コード`, `銘柄名`, `現在株価`, `最終スコア` だけ表示
-- CSV自体は `outputs/candidates_current.csv` に保存
+- CSVが無い、`outputs/candidates_recent.csv` が無い、またはモデル/データより古い場合だけ、既存モデルで再推論
+- 最新候補には `銘柄コード`, `銘柄名`, `現在株価`, `回数`, `初回日`, `初回後騰落`, `最終スコア` を表示
+- 直近履歴には、最新日を除く過去5候補日の上位候補も表示
+- 最新候補CSVは `outputs/candidates_current.csv`、直近履歴CSVは `outputs/candidates_recent.csv` に保存
+
+最新候補の見方:
+
+- `最終スコア`: モデルが推定したフォロースルー確率
+- `回数`: 最新日を含む直近6候補日のうち、初動ゲートに入り、かつ `final_score >= 0.55` だった回数
+- `初回日`: 直近6候補日の中で、同じ銘柄が初めて `final_score >= 0.55` になった日
+- `初回後騰落`: `初回日` の終値から現在株価までの騰落
+- 回数が1の銘柄は、初回日と初回後騰落を空欄表示
 
 大引け後など、株価データを更新してから既存モデルで推論する場合:
 
@@ -51,9 +60,16 @@ scripts\rolling_evaluation_barrier15_10.bat
 
 JPXの `Issues_*.csv` から普通株リストを再作成する場合:
 
+1. JPX Client Portalから上場銘柄一覧CSVをダウンロードします。
+2. ダウンロードしたCSVをリポジトリ内の `config` フォルダへ置きます。
+3. ファイル名は `Issues_*.csv` の形にします。例: `config/Issues_20260526020732.csv`
+4. 次のコマンドを実行します。
+
 ```bat
 scripts\build_listed_stocks.bat
 ```
+
+`scripts\build_listed_stocks.bat` は、`config\Issues_*.csv` のうち更新日時が一番新しいファイルを自動で使い、普通株だけに絞った `config\listed_stocks.csv` を作成します。既存の `config\listed_stocks.csv` は上書きされます。
 
 銘柄情報CSVはJPX Client Portalの上場銘柄一覧から取得します。
 
@@ -89,6 +105,7 @@ bash scripts/train_evaluation.sh
 - `models/momentum_nn_current.pt`: 画面表示・推論で使う現在モデル。通常は運用モデルと同じ
 - `models/momentum_nn_production.pt`: 運用モデル
 - `outputs/candidates_current.csv`: 現在の候補CSV
+- `outputs/candidates_recent.csv`: 最新日を含む直近6候補日の履歴CSV
 - `outputs/metrics_current.json`: 現在モデルの指標。通常は運用モデルの指標
 - `outputs/metrics_production.json`: 運用モデルの指標
 - `outputs/gate_current.json`: 現在ゲートの確認指標
@@ -128,7 +145,22 @@ bash scripts/train_evaluation.sh
 - `ret_5d > -0.01`
 - `turnover_ratio_1d_20d >= 1.05` または `turnover_ratio_5d_20d >= 1.05`
 - `close_ma25_ratio >= -0.01`
-- 同一銘柄の候補は20営業日クールダウン
+
+学習時と推論時の候補扱い:
+
+- 学習時は、同じ上昇イベントを重複学習しにくくするため、同一銘柄の候補に20営業日クールダウンを適用
+- 推論時は、クールダウン後の `initial_momentum` ではなく、クールダウン前の `raw_initial_momentum` をスコアリング
+- そのため、同じ銘柄が別日で直近履歴に複数回表示される
+- `screen_latest.bat` では、最新候補CSVは最新日だけを出力しつつ、回数・初回日・初回後騰落は直近6候補日で集計
+
+推論CSVの主な追加列:
+
+- `recent_signal_count`: 出力期間内でraw条件に入った回数
+- `raw_recent_signal_count`: 集計期間内でraw条件に入った回数
+- `score_recent_signal_count`: 集計期間内でraw条件に入り、かつ `final_score >= 0.55` だった回数
+- `first_score_signal_date`: 集計期間内で最初に `final_score >= 0.55` になった日
+- `first_score_signal_close`: `first_score_signal_date` の終値
+- `return_since_first_score_signal`: `first_score_signal_close` から現在株価までの騰落
 
 ## 評価メモ
 

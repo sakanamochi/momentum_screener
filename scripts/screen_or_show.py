@@ -9,19 +9,21 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "data" / "ohlcv_current.csv"
 MODEL = ROOT / "models" / "momentum_nn_current.pt"
 CANDIDATES = ROOT / "outputs" / "candidates_current.csv"
+RECENT_CANDIDATES = ROOT / "outputs" / "candidates_recent.csv"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+SIGNAL_COUNT_MIN_SCORE = "0.55"
 
 
 def is_fresh() -> bool:
-    if not CANDIDATES.exists():
+    if not CANDIDATES.exists() or not RECENT_CANDIDATES.exists():
         return False
-    candidate_time = CANDIDATES.stat().st_mtime
+    candidate_time = min(CANDIDATES.stat().st_mtime, RECENT_CANDIDATES.stat().st_mtime)
     inputs = [path for path in [CACHE, MODEL] if path.exists()]
     return bool(inputs) and all(candidate_time >= path.stat().st_mtime for path in inputs)
 
 
-def run_screen() -> None:
-    command = [
+def screen_command(output: Path, recent_days: int) -> list[str]:
+    return [
         str(PYTHON),
         "-m",
         "momentum_screener.cli",
@@ -32,7 +34,11 @@ def run_screen() -> None:
         "--model-path",
         str(MODEL),
         "--output",
-        str(CANDIDATES),
+        str(output),
+        "--recent-days",
+        str(recent_days),
+        "--signal-count-days",
+        "6",
         "--gate-min-turnover-5d",
         "50000000",
         "--gate-min-ret-5d",
@@ -43,8 +49,14 @@ def run_screen() -> None:
         "1.05",
         "--gate-min-close-ma25-ratio",
         "-0.01",
+        "--signal-count-min-score",
+        SIGNAL_COUNT_MIN_SCORE,
     ]
-    subprocess.run(command, cwd=ROOT, check=True)
+
+
+def run_screen() -> None:
+    subprocess.run(screen_command(CANDIDATES, recent_days=1), cwd=ROOT, check=True)
+    subprocess.run(screen_command(RECENT_CANDIDATES, recent_days=6), cwd=ROOT, check=True)
 
 
 def update_data() -> None:
@@ -68,12 +80,14 @@ def main() -> None:
     update_requested = "--update-data" in sys.argv
     force_requested = "--force" in sys.argv
 
+    if update_requested:
+        print("Updating OHLCV data without retraining the model.", flush=True)
+        update_data()
+        force_requested = True
+
     if is_fresh() and not force_requested:
         print("Existing latest candidates CSV is up to date. Skipping inference.", flush=True)
     else:
-        if update_requested:
-            print("Updating OHLCV data without retraining the model.", flush=True)
-            update_data()
         print("Candidates CSV is missing or stale. Running inference.", flush=True)
         run_screen()
 

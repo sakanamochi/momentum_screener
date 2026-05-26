@@ -315,19 +315,73 @@ def inspect_gate_command(args: argparse.Namespace) -> None:
 def screen_command(args: argparse.Namespace) -> None:
     labelled = build_frame(args)
     feature_columns = get_feature_columns(args)
-    candidates = make_event_dataset(labelled, require_label=False, feature_columns=feature_columns)
+    raw_candidates = labelled[labelled["raw_initial_momentum"]].copy()
+    raw_candidates = raw_candidates.replace([np.inf, -np.inf], np.nan)
+    raw_candidates = raw_candidates.dropna(subset=feature_columns).reset_index(drop=True)
+    recent_days = max(int(args.recent_days), 1)
+    signal_count_days = max(int(args.signal_count_days or recent_days), recent_days)
+    latest_date = labelled["date"].dropna().max()
     if args.as_of:
         as_of = pd.Timestamp(args.as_of)
-        candidates = candidates[candidates["date"] == as_of].copy()
+        output_mask = raw_candidates["date"] == as_of
+        count_date_source = raw_candidates.loc[raw_candidates["date"] <= as_of, "date"]
     else:
-        latest_date = candidates["date"].max()
-        candidates = candidates[candidates["date"] == latest_date].copy()
+        latest_dates = raw_candidates["date"].dropna().drop_duplicates().sort_values().tail(recent_days)
+        output_mask = raw_candidates["date"].isin(latest_dates)
+        count_date_source = raw_candidates["date"]
+
+    signal_count_dates = count_date_source.dropna().drop_duplicates().sort_values().tail(signal_count_days)
+    candidates = raw_candidates[raw_candidates["date"].isin(signal_count_dates)].copy()
 
     model, scaler, feature_columns = load_artifacts(args.model_path)
     candidates["follow_through_prob"] = predict_proba(model, scaler, feature_columns, candidates)
     candidates["final_score"] = candidates["follow_through_prob"]
+    latest_by_code = labelled.sort_values("date").groupby("code")["close"].last()
+    candidates["latest_close"] = candidates["code"].map(latest_by_code)
+    candidates["return_since_candidate"] = candidates["latest_close"] / candidates["close"] - 1.0
+    candidates["recent_signal_count"] = candidates.groupby("code")["date"].transform("nunique")
+    raw_recent = labelled[labelled["date"].isin(signal_count_dates) & labelled["raw_initial_momentum"]].copy()
+    raw_recent_counts = raw_recent.groupby("code")["date"].nunique()
+    latest_raw_codes = set(
+        labelled.loc[
+            (labelled["date"] == latest_date) & labelled["raw_initial_momentum"],
+            "code",
+        ]
+    )
+    raw_signal_counts = (
+        labelled[labelled["raw_initial_momentum"]]
+        .groupby("code")["date"]
+        .apply(lambda dates: dates.sort_values().to_numpy())
+    )
+    candidates["raw_recent_signal_count"] = candidates["code"].map(raw_recent_counts).fillna(0).astype(int)
+    candidates["raw_signal_count_since_candidate"] = candidates.apply(
+        lambda row: int((raw_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
+        axis=1,
+    )
+    score_count_candidates = candidates[candidates["final_score"] >= args.signal_count_min_score]
+    score_recent_counts = score_count_candidates.groupby("code")["date"].nunique()
+    score_signal_counts = score_count_candidates.groupby("code")["date"].apply(lambda dates: dates.sort_values().to_numpy())
+    first_score_signals = (
+        score_count_candidates.sort_values(["code", "date"])
+        .groupby("code")
+        .first()[["date", "close"]]
+        .rename(columns={"date": "first_score_signal_date", "close": "first_score_signal_close"})
+        .reset_index()
+    )
+    candidates["score_recent_signal_count"] = candidates["code"].map(score_recent_counts).fillna(0).astype(int)
+    candidates["score_signal_count_since_candidate"] = candidates.apply(
+        lambda row: int((score_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
+        axis=1,
+    )
+    candidates = candidates.merge(first_score_signals, on="code", how="left")
+    candidates["return_since_first_score_signal"] = (
+        candidates["latest_close"] / candidates["first_score_signal_close"] - 1.0
+    )
+    candidates["signal_still_active"] = candidates["code"].isin(latest_raw_codes)
     candidates["reason"] = candidates.apply(make_reason, axis=1) if not candidates.empty else []
-    candidates = candidates.sort_values("final_score", ascending=False)
+    output_codes_dates = raw_candidates.loc[output_mask, ["code", "date"]].drop_duplicates()
+    candidates = candidates.merge(output_codes_dates, on=["code", "date"], how="inner")
+    candidates = candidates.sort_values(["date", "final_score"], ascending=[False, False])
 
     output = candidates.reindex(columns=OUTPUT_COLUMNS)
     output_path = Path(args.output)
@@ -471,6 +525,19 @@ def add_screen_args(parser: argparse.ArgumentParser, include_model_path: bool = 
         parser.add_argument("--model-path", default="models/momentum_nn.pt")
     parser.add_argument("--output", default="outputs/candidates.csv")
     parser.add_argument("--as-of", default=None, help="Screen a specific date, e.g. 2026-05-25. Defaults to latest candidate date.")
+    parser.add_argument("--recent-days", type=int, default=1, help="Keep candidates from the latest N candidate dates.")
+    parser.add_argument(
+        "--signal-count-days",
+        type=int,
+        default=None,
+        help="Use the latest N candidate dates for repeat-signal counts. Defaults to --recent-days.",
+    )
+    parser.add_argument(
+        "--signal-count-min-score",
+        type=float,
+        default=0.55,
+        help="Only count repeat signals whose final_score is at least this value.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

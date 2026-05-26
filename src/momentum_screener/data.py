@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
 
 
 REQUIRED_COLUMNS = ["date", "code", "open", "high", "low", "close", "volume"]
+MIN_LATEST_DATE_COVERAGE = 0.8
+ACCEPT_TODAY_AFTER_HOUR_JST = 16
 
 
 def _normalize_symbol(value: object) -> str | None:
@@ -168,6 +172,16 @@ def download_ohlcv(
     return df.sort_values(["code", "date"]).reset_index(drop=True)
 
 
+def drop_intraday_today(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    now = datetime.now(ZoneInfo("Asia/Tokyo"))
+    if now.hour >= ACCEPT_TODAY_AFTER_HOUR_JST:
+        return df
+    today = pd.Timestamp(now.date())
+    return df[df["date"] < today].copy()
+
+
 def load_or_download_ohlcv(
     symbols: list[str],
     start: str,
@@ -182,9 +196,11 @@ def load_or_download_ohlcv(
         missing = set(REQUIRED_COLUMNS) - set(df.columns)
         if missing:
             raise ValueError(f"Cached OHLCV is missing columns: {sorted(missing)}")
-        return df[REQUIRED_COLUMNS].sort_values(["code", "date"]).reset_index(drop=True)
+        df = drop_intraday_today(df[REQUIRED_COLUMNS])
+        return df.sort_values(["code", "date"]).reset_index(drop=True)
 
     df = download_ohlcv(symbols, start=start, end=end, batch_size=batch_size)
+    df = drop_intraday_today(df)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
     return df
@@ -211,6 +227,7 @@ def refresh_ohlcv_cache(
 
     latest = download_ohlcv(symbols, start=start, end=end, batch_size=batch_size)
     if latest.empty:
+        existing = drop_intraday_today(existing)
         if existing.empty:
             return existing
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +237,15 @@ def refresh_ohlcv_cache(
     merged = pd.concat([existing, latest], ignore_index=True)
     merged = merged.drop_duplicates(subset=["date", "code"], keep="last")
     merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
+    merged = drop_intraday_today(merged)
+    expected_symbols = len(set(symbols))
+    if expected_symbols > 0:
+        while not merged.empty:
+            latest_date = merged["date"].max()
+            latest_count = int((merged["date"] == latest_date).sum())
+            if latest_count >= expected_symbols * MIN_LATEST_DATE_COVERAGE:
+                break
+            merged = merged[merged["date"] < latest_date].copy()
 
     path.parent.mkdir(parents=True, exist_ok=True)
     merged.to_csv(path, index=False)

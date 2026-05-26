@@ -45,6 +45,17 @@ OUTPUT_COLUMNS = [
     "float_turnover_5d",
     "follow_through_prob",
     "final_score",
+    "latest_close",
+    "return_since_candidate",
+    "recent_signal_count",
+    "raw_recent_signal_count",
+    "raw_signal_count_since_candidate",
+    "score_recent_signal_count",
+    "score_signal_count_since_candidate",
+    "first_score_signal_date",
+    "first_score_signal_close",
+    "return_since_first_score_signal",
+    "signal_still_active",
     "reason",
 ]
 
