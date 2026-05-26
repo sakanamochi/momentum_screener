@@ -11,6 +11,88 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 
+RISK_ADJUSTMENT_PRESETS: dict[str, dict[str, float]] = {
+    "none": {
+        "volatility": 0.0,
+        "intraday_range": 0.0,
+        "upper_shadow": 0.0,
+        "ret20_overheat": 0.0,
+        "ret5_overheat": 0.0,
+        "weak_close": 0.0,
+        "risk_cap": 0.0,
+        "ret5_accel": 0.0,
+        "turnover": 0.0,
+        "high_breakout": 0.0,
+        "upside_cap": 0.0,
+    },
+    "light": {
+        "volatility": 0.08,
+        "intraday_range": 0.06,
+        "upper_shadow": 0.05,
+        "ret20_overheat": 0.06,
+        "ret5_overheat": 0.04,
+        "weak_close": 0.04,
+        "risk_cap": 0.30,
+        "ret5_accel": 0.06,
+        "turnover": 0.04,
+        "high_breakout": 0.03,
+        "upside_cap": 0.13,
+    },
+    "current": {
+        "volatility": 0.14,
+        "intraday_range": 0.10,
+        "upper_shadow": 0.09,
+        "ret20_overheat": 0.10,
+        "ret5_overheat": 0.07,
+        "weak_close": 0.06,
+        "risk_cap": 0.45,
+        "ret5_accel": 0.08,
+        "turnover": 0.06,
+        "high_breakout": 0.04,
+        "upside_cap": 0.18,
+    },
+    "strict": {
+        "volatility": 0.20,
+        "intraday_range": 0.15,
+        "upper_shadow": 0.13,
+        "ret20_overheat": 0.15,
+        "ret5_overheat": 0.10,
+        "weak_close": 0.08,
+        "risk_cap": 0.65,
+        "ret5_accel": 0.08,
+        "turnover": 0.06,
+        "high_breakout": 0.04,
+        "upside_cap": 0.18,
+    },
+    "volatility_only": {
+        "volatility": 0.18,
+        "intraday_range": 0.13,
+        "upper_shadow": 0.0,
+        "ret20_overheat": 0.0,
+        "ret5_overheat": 0.0,
+        "weak_close": 0.0,
+        "risk_cap": 0.35,
+        "ret5_accel": 0.08,
+        "turnover": 0.06,
+        "high_breakout": 0.04,
+        "upside_cap": 0.18,
+    },
+    "overheat_only": {
+        "volatility": 0.0,
+        "intraday_range": 0.0,
+        "upper_shadow": 0.08,
+        "ret20_overheat": 0.16,
+        "ret5_overheat": 0.12,
+        "weak_close": 0.06,
+        "risk_cap": 0.35,
+        "ret5_accel": 0.08,
+        "turnover": 0.06,
+        "high_breakout": 0.04,
+        "upside_cap": 0.18,
+    },
+}
+
+
 class MomentumNet(nn.Module):
     def __init__(self, input_dim: int) -> None:
         super().__init__()
@@ -64,6 +146,33 @@ def _split_by_date(events: pd.DataFrame, train_end: str, valid_end: str) -> tupl
     return train, valid, test
 
 
+def topn_selection_score(
+    frame: pd.DataFrame,
+    probabilities: np.ndarray,
+    n: int = 50,
+    stop_penalty: float = 0.5,
+) -> float:
+    if frame.empty or len(probabilities) == 0:
+        return float("-inf")
+    scored = frame.copy()
+    scored["follow_through_prob"] = probabilities
+    top = scored.sort_values("follow_through_prob", ascending=False).head(n)
+    if top.empty or top["target_20d"].isna().all():
+        return float("-inf")
+
+    precision = float(top["target_20d"].mean())
+    if "hit_stop_day" not in top.columns or "hit_profit_day" not in top.columns:
+        return precision
+
+    hit_stop = top["hit_stop_day"].notna()
+    hit_profit = top["hit_profit_day"].notna()
+    stop_first = hit_stop & (~hit_profit | (top["hit_stop_day"] <= top["hit_profit_day"]))
+    return precision - stop_penalty * float(stop_first.mean())
+
+
+DEFAULT_RISK_ADJUSTMENT = "volatility_only"
+
+
 def train_model(
     events: pd.DataFrame,
     feature_columns: list[str],
@@ -74,6 +183,7 @@ def train_model(
     learning_rate: float = 1e-3,
     patience: int = 12,
     seed: int = 42,
+    risk_adjustment: str = DEFAULT_RISK_ADJUSTMENT,
 ) -> tuple[TrainResult, dict[str, float]]:
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -106,6 +216,7 @@ def train_model(
 
     best_state = None
     best_valid_loss = float("inf")
+    best_selection_score = float("-inf")
     epochs_without_improvement = 0
     epochs_trained = 0
 
@@ -123,7 +234,13 @@ def train_model(
             xv = torch.tensor(x_valid, dtype=torch.float32)
             yv = torch.tensor(y_valid, dtype=torch.float32)
             wv = torch.tensor(w_valid, dtype=torch.float32)
-            valid_loss = (loss_fn(model(xv), yv) * wv).mean().item()
+            valid_logits = model(xv)
+            valid_loss = (loss_fn(valid_logits, yv) * wv).mean().item()
+            valid_prob = torch.sigmoid(valid_logits).cpu().numpy()
+
+        selection_score = topn_selection_score(valid, valid_prob, n=50, stop_penalty=0.5)
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
 
         epochs_trained = epoch
         if valid_loss < best_valid_loss:
@@ -138,8 +255,15 @@ def train_model(
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    metrics = evaluate_splits(model, scaler, feature_columns, {"train": train, "valid": valid, "test": test})
+    metrics = evaluate_splits(
+        model,
+        scaler,
+        feature_columns,
+        {"train": train, "valid": valid, "test": test},
+        risk_adjustment=risk_adjustment,
+    )
     metrics["best_valid_loss"] = best_valid_loss
+    metrics["best_selection_score"] = best_selection_score
     metrics["epochs_trained"] = float(epochs_trained)
     return TrainResult(model, scaler, feature_columns, best_valid_loss, epochs_trained), metrics
 
@@ -154,10 +278,38 @@ def predict_proba(model: MomentumNet, scaler: SimpleScaler, feature_columns: lis
         return torch.sigmoid(logits).cpu().numpy()
 
 
+def add_risk_adjusted_score(frame: pd.DataFrame, preset: str = DEFAULT_RISK_ADJUSTMENT) -> pd.DataFrame:
+    if preset not in RISK_ADJUSTMENT_PRESETS:
+        raise ValueError(f"Unknown risk_adjustment preset: {preset}")
+    weights = RISK_ADJUSTMENT_PRESETS[preset]
+    scored = frame.copy()
+    risk_penalty = (
+        scored["volatility_20d"].fillna(0.0).clip(lower=0.02, upper=0.12).sub(0.02).div(0.10).mul(weights["volatility"])
+        + scored["intraday_range_ratio"].fillna(0.0).clip(lower=0.04, upper=0.20).sub(0.04).div(0.16).mul(weights["intraday_range"])
+        + scored["upper_shadow_ratio"].fillna(0.0).clip(lower=0.20, upper=0.80).sub(0.20).div(0.60).mul(weights["upper_shadow"])
+        + scored["ret_20d"].fillna(0.0).clip(lower=0.20, upper=1.00).sub(0.20).div(0.80).mul(weights["ret20_overheat"])
+        + scored["ret_5d"].fillna(0.0).clip(lower=0.15, upper=0.60).sub(0.15).div(0.45).mul(weights["ret5_overheat"])
+        + (1.0 - scored["close_position_in_range"].fillna(0.5).clip(lower=0.0, upper=1.0)).mul(weights["weak_close"])
+    )
+    upside_bonus = (
+        scored["ret_5d_accel"].fillna(0.0).clip(lower=0.00, upper=0.20).div(0.20).mul(weights["ret5_accel"])
+        + scored["turnover_ratio_5d_20d"].fillna(1.0).clip(lower=1.00, upper=2.50).sub(1.00).div(1.50).mul(weights["turnover"])
+        + scored["is_20d_high"].fillna(0.0).clip(lower=0.0, upper=1.0).mul(weights["high_breakout"])
+    )
+    scored["risk_penalty"] = risk_penalty.clip(lower=0.0, upper=weights["risk_cap"])
+    scored["upside_bonus"] = upside_bonus.clip(lower=0.0, upper=weights["upside_cap"])
+    scored["final_score"] = (scored["follow_through_prob"] + scored["upside_bonus"] - scored["risk_penalty"]).clip(0.0, 1.0)
+    return scored
+
+
+def _score_column(frame: pd.DataFrame) -> str:
+    return "final_score" if "final_score" in frame.columns else "follow_through_prob"
+
+
 def precision_at_n(frame: pd.DataFrame, n: int) -> float:
     if frame.empty:
         return float("nan")
-    top = frame.sort_values("follow_through_prob", ascending=False).head(n)
+    top = frame.sort_values(_score_column(frame), ascending=False).head(n)
     if top.empty or top["target_20d"].isna().all():
         return float("nan")
     return float(top["target_20d"].mean())
@@ -166,7 +318,7 @@ def precision_at_n(frame: pd.DataFrame, n: int) -> float:
 def stop_first_rate_at_n(frame: pd.DataFrame, n: int) -> float:
     if frame.empty or "hit_stop_day" not in frame.columns or "hit_profit_day" not in frame.columns:
         return float("nan")
-    top = frame.sort_values("follow_through_prob", ascending=False).head(n)
+    top = frame.sort_values(_score_column(frame), ascending=False).head(n)
     if top.empty:
         return float("nan")
     hit_stop = top["hit_stop_day"].notna()
@@ -178,7 +330,7 @@ def stop_first_rate_at_n(frame: pd.DataFrame, n: int) -> float:
 def avg_days_to_profit_at_n(frame: pd.DataFrame, n: int) -> float:
     if frame.empty or "hit_profit_day" not in frame.columns:
         return float("nan")
-    top = frame.sort_values("follow_through_prob", ascending=False).head(n)
+    top = frame.sort_values(_score_column(frame), ascending=False).head(n)
     profit_days = top.loc[top["hit_profit_day"].notna(), "hit_profit_day"]
     if profit_days.empty:
         return float("nan")
@@ -190,6 +342,7 @@ def evaluate_splits(
     scaler: SimpleScaler,
     feature_columns: list[str],
     splits: dict[str, pd.DataFrame],
+    risk_adjustment: str = DEFAULT_RISK_ADJUSTMENT,
 ) -> dict[str, float]:
     metrics: dict[str, float] = {}
     for name, split in splits.items():
@@ -198,6 +351,7 @@ def evaluate_splits(
             continue
         scored = split.copy()
         scored["follow_through_prob"] = predict_proba(model, scaler, feature_columns, scored)
+        scored = add_risk_adjusted_score(scored, preset=risk_adjustment)
         metrics[f"{name}_events"] = float(len(scored))
         metrics[f"{name}_precision_at_20"] = precision_at_n(scored, 20)
         metrics[f"{name}_precision_at_50"] = precision_at_n(scored, 50)
@@ -205,8 +359,13 @@ def evaluate_splits(
         metrics[f"{name}_stop_first_rate_at_50"] = stop_first_rate_at_n(scored, 50)
         metrics[f"{name}_avg_days_to_profit_at_20"] = avg_days_to_profit_at_n(scored, 20)
         metrics[f"{name}_avg_days_to_profit_at_50"] = avg_days_to_profit_at_n(scored, 50)
-        top20 = scored.sort_values("follow_through_prob", ascending=False).head(20)
+        ranked = scored.sort_values(_score_column(scored), ascending=False)
+        top20 = ranked.head(20)
+        top50 = ranked.head(50)
         metrics[f"{name}_avg_future_max_ret_at_20"] = float(top20["future_max_ret_20d"].mean()) if not top20.empty else float("nan")
+        metrics[f"{name}_avg_future_min_ret_at_20"] = float(top20["future_min_ret_20d"].mean()) if not top20.empty and "future_min_ret_20d" in top20.columns else float("nan")
+        metrics[f"{name}_avg_future_max_ret_at_50"] = float(top50["future_max_ret_20d"].mean()) if not top50.empty else float("nan")
+        metrics[f"{name}_avg_future_min_ret_at_50"] = float(top50["future_min_ret_20d"].mean()) if not top50.empty and "future_min_ret_20d" in top50.columns else float("nan")
     return metrics
 
 

@@ -40,8 +40,6 @@ def screen_command(output: Path, recent_days: int) -> list[str]:
         str(recent_days),
         "--signal-count-days",
         str(SCREEN_SETTINGS["signal_count_days"]),
-        "--signal-count-min-score",
-        str(SCREEN_SETTINGS["signal_count_min_score"]),
     ]
 
 

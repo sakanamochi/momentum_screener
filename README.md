@@ -1,219 +1,112 @@
 # momentum_screener
 
-日本株の初動モメンタム候補を抽出し、ニューラルネットワークで「翌営業日始値から20営業日以内に+15%へ先に到達し、-10%へ先に到達しない確率」を推定する個人用スクリーニングツールです。
+日本株の初動候補を抽出し、20営業日以内に `+15%` へ先に到達し、`-10%` へ先に到達しない確率をニューラルネットで推定する個人用スクリーニングツールです。
 
-これは投資助言ではなく、検証用の候補抽出ツールです。
+投資助言ではありません。検証と運用補助のためのツールです。
 
-## 通常の使い方
+## よく使う入口
 
-候補を表示する場合:
+最新候補を表示:
 
 ```bat
 scripts\screen_latest.bat
 ```
 
-動き:
-
-- 既存の `outputs/candidates_current.csv` が最新なら、再推論せずに即表示
-- CSVが無い、`outputs/candidates_recent.csv` が無い、またはモデル/データより古い場合だけ、既存モデルで再推論
-- 最新候補には `銘柄コード`, `銘柄名`, `現在株価`, `回数`, `初回日`, `初回後騰落`, `最終スコア` を表示
-- 直近履歴には、最新日を除く過去5候補日の上位候補も表示
-- 最新候補CSVは `outputs/candidates_current.csv`、直近履歴CSVは `outputs/candidates_recent.csv` に保存
-
-最新候補の見方:
-
-- `最終スコア`: モデルが推定したフォロースルー確率
-- `回数`: 最新日を含む直近候補日のうち、初動ゲートに入り、かつ設定スコア閾値以上だった回数
-- `初回日`: 直近候補日の中で、同じ銘柄が初めて設定スコア閾値以上になった日
-- `初回後騰落`: `初回日` の終値から現在株価までの騰落
-- 回数が1の銘柄は、初回日と初回後騰落を空欄表示
-
-大引け後など、株価データを更新してから既存モデルで推論する場合:
+株価データを更新してから表示:
 
 ```bat
 scripts\update_and_screen.bat
 ```
 
-これはモデルを再学習しません。日々の運用ではこちらが「データ更新あり」のメインです。
-
-## たまに使う操作
-
-運用モデルを再学習する場合:
+モデルを再学習:
 
 ```bat
 scripts\train_current.bat
 ```
 
-再学習は毎日行う想定ではありません。銘柄リストを更新した時、ゲート条件や特徴量を変えた時、または月1回程度の見直し用です。
-
-パラメータ変更を時系列分割で確認する場合:
-
-```bat
-experiments\evaluation\train_evaluation.bat
-```
-
-複数年のローリング評価を行う場合:
-
-```bat
-experiments\evaluation\rolling_evaluation.bat
-```
-
-パラメータと特徴量セットをまとめて探索する場合は、通常運用と混ざらないよう `experiments/optimization/` を使います。
-実行方法、停止方法、今回の検証結果概要は [experiments/optimization/README.md](experiments/optimization/README.md) にまとめています。
-単発評価とローリング評価の使い方は [experiments/evaluation/README.md](experiments/evaluation/README.md) にまとめています。
-
-JPXの `Issues_*.csv` から普通株リストを再作成する場合:
-
-1. JPX Client Portalから上場銘柄一覧CSVをダウンロードします。
-2. ダウンロードしたCSVをリポジトリ内の `config` フォルダへ置きます。
-3. ファイル名は `Issues_*.csv` の形にします。例: `config/Issues_20260526020732.csv`
-4. 次のコマンドを実行します。
-
-```bat
-scripts\build_listed_stocks.bat
-```
-
-`scripts\build_listed_stocks.bat` は、`config\Issues_*.csv` のうち更新日時が一番新しいファイルを自動で使い、普通株だけに絞った `config\listed_stocks.csv` を作成します。既存の `config\listed_stocks.csv` は上書きされます。
-
-銘柄情報CSVはJPX Client Portalの上場銘柄一覧から取得します。
-
-https://clientportal.jpx.co.jp/ClientPortal/s/Issue?language=ja
-
-初動ゲートの広さや取りこぼしを確認する場合:
-
-```bat
-scripts\inspect_gate.bat
-```
-
-銘柄コードを指定して、過去に設定スコア閾値を超えた候補日と、翌営業日始値から20営業日後または直近日までの成績を見る場合:
-
-```bat
-scripts\inspect_symbol_history.bat
-```
-
-またはコードを直接渡します。
+銘柄ごとの過去シグナルを確認:
 
 ```bat
 scripts\inspect_symbol_history.bat 285A
 ```
 
-PowerShell版とGit Bash版もあります。
+ローリング評価:
+
+```bat
+experiments\evaluation\rolling_evaluation.bat
+```
+
+リスク調整プリセットの比較:
 
 ```powershell
-.\scripts\screen_latest.ps1
-.\scripts\update_and_screen.ps1
-.\scripts\train_current.ps1
-.\experiments\evaluation\train_evaluation.ps1
-.\experiments\evaluation\rolling_evaluation.ps1
+& '.venv\Scripts\python.exe' experiments\optimization\evaluate_risk_presets.py
 ```
 
-```bash
-bash scripts/screen_latest.sh
-bash scripts/update_and_screen.sh
-bash scripts/train_current.sh
-bash experiments/evaluation/train_evaluation.sh
-bash experiments/evaluation/rolling_evaluation.sh
+## 主要ファイル
+
+- `src/momentum_screener/data.py`: yfinance からの取得、OHLCV キャッシュ更新
+- `src/momentum_screener/features.py`: 特徴量、初動ゲート、ラベル、出力列
+- `src/momentum_screener/model.py`: NN、学習、評価、リスク調整スコア
+- `src/momentum_screener/cli.py`: `train`, `screen`, `refresh-data`, `rolling-eval` などのCLI
+- `src/momentum_screener/settings.py`: `config/screening_settings.json` を読み込む共通設定
+- `scripts/screen_or_show.py`: 日常表示用の入口。CSVが新しければ再推論せず表示だけ行う
+- `scripts/show_candidates.py`: 最新候補と直近履歴をコンソール表示
+- `scripts/inspect_symbol_history.py`: 1銘柄の過去シグナルとその後の値動きを表示
+- `experiments/optimization/evaluate_risk_presets.py`: 学習を増やさずリスク調整だけ比較
+- `experiments/optimization/scoring_design_notes.txt`: 今後の目的関数・評価指標・スコア設計メモ
+
+## 現在の学習仕様
+
+- 初動候補日は、同一銘柄で20営業日のクールダウンを置いて学習に使う
+- 推論時はクールダウン前の `raw_initial_momentum` もスコアリングする
+- ラベルは `barrier`
+- エントリー価格は候補日の翌営業日始値
+- 20営業日以内に `+15%` に到達し、かつ `-10%` 到達より先なら正例
+- 同じ日に利確ラインと損切りラインへ到達した場合は保守的に失敗扱い
+- 学習設定
+  - dropout: `0.15 / 0.10`
+  - batch size: `256`
+  - learning rate: `1e-3`
+  - best epoch: validation loss
+
+## 現在のスコア仕様
+
+モデルの出力は `follow_through_prob` です。表示やランキングでは、リスク調整後の `final_score` を使います。
+
+```text
+final_score = follow_through_prob + upside_bonus - risk_penalty
 ```
 
-## 現在の標準ファイル
+デフォルトのリスク調整は `volatility_only` です。過去の探索では、純粋な上昇率だけなら `none` も強い一方、下落を抑える目的では `volatility_only` が扱いやすい結果でした。
 
-- `config/screening_settings.json`: 初動ゲート、ラベル条件、スコア集計閾値の共通設定
-- `config/Issues_20260526020732.csv`: JPXから取得した元の上場銘柄CSV
-- `config/listed_stocks.csv`: 普通株に絞った銘柄リスト
-- `data/ohlcv_current.csv`: 現在のOHLCVキャッシュ
-- `models/momentum_nn_production.pt`: 運用モデル
-- `outputs/candidates_current.csv`: 現在の候補CSV
-- `outputs/candidates_recent.csv`: 最新日を含む直近6候補日の履歴CSV
-- `outputs/metrics_production.json`: 運用モデルの指標
-- `outputs/gate_current.json`: 現在ゲートの確認指標
+## 出力
 
-評価用モデルや評価結果は必要な時だけ `experiments\evaluation\` や `experiments\optimization\` 側で再生成します。
-検証で作成されるモデルや結果は `experiments/outputs/<検証名>/` に保存され、通常運用の `outputs/` とは分けています。
+- `outputs/candidates_current.csv`: 最新候補
+- `outputs/candidates_recent.csv`: 直近候補履歴
+- `outputs/metrics_production.json`: 本番モデルの学習メトリクス
+- `outputs/symbol_history/`: 銘柄別履歴確認のCSV
+- `experiments/outputs/`: 評価・探索結果
 
-## 運用モデルの学習条件
+最新候補の表示では、直近候補日のうち上位30位に入った回数を `回数` として表示します。最低表示数は1です。
 
-初動ゲート、利確/損切り、スコア集計閾値などの標準値は `config/screening_settings.json` にまとめています。
-値を変える場合は、原則としてこのファイルを更新してから再学習・再推論します。
+## 設定
 
-学習データ:
+運用でよく触る値は `config/screening_settings.json` に集約しています。
 
-- 対象: JPX銘柄CSVから抽出した国内普通株
-- 銘柄リスト: `config/listed_stocks.csv`
-- 元データ: yfinance日足OHLCV
-- OHLCV期間: `2020-01-06` から `2026-05-25`
-- OHLCV取得銘柄数: `3,728`
-- OHLCV行数: `5,388,274`
+- `gate`: 初動候補の抽出条件
+- `label`: 学習ラベルの条件
+- `screen.signal_count_days`: 直近何候補日で上位30入り回数を見るか
 
-運用モデル:
+設定を変えた場合は、基本的に再学習とローリング評価で確認してください。
 
-- ファイル: `models/momentum_nn_production.pt`
-- 日々の候補表示、データ更新後の推論、銘柄別履歴確認はこのモデルを直接使用
-- 学習範囲: ラベルが作れる最新イベントまで
-- 直近20営業日程度のイベントは、20営業日先の判定がまだできないため学習対象外
-- 運用モデルは未知期間を残さず、使えるデータをなるべく学習に回す本番用
-- 指標の `valid` は早期停止確認用であり、厳密な将来評価ではありません
+## 開発メモ
 
-ラベル:
-
-- 候補日の翌営業日始値をエントリー価格として使用
-- 20営業日以内に `+15%` へ先に到達し、`-10%` へ先に到達しない場合を成功
-- 同じ日に利確ラインと損切りラインへ両方到達した場合は保守的に失敗扱い
-- `stop_first_rate_at_20/50` は上位20/50件のうち、損切りラインへ先に到達した比率
-
-現在の初動ゲート、利確/損切り条件、直近回数のスコア閾値は `config/screening_settings.json` で管理します。
-各パラメータの意味も同じファイル内の `_description` にまとめています。
-
-学習時と推論時の候補扱い:
-
-- 学習時は、同じ上昇イベントを重複学習しにくくするため、同一銘柄の候補に20営業日クールダウンを適用
-- 推論時は、クールダウン後の `initial_momentum` ではなく、クールダウン前の `raw_initial_momentum` をスコアリング
-- そのため、同じ銘柄が別日で直近履歴に複数回表示される
-- `screen_latest.bat` では、最新候補CSVは最新日だけを出力しつつ、回数・初回日・初回後騰落は直近6候補日で集計
-
-推論CSVの主な追加列:
-
-- `recent_signal_count`: 出力期間内でraw条件に入った回数
-- `raw_recent_signal_count`: 集計期間内でraw条件に入った回数
-- `score_recent_signal_count`: 集計期間内でraw条件に入り、かつ設定スコア閾値以上だった回数
-- `first_score_signal_date`: 集計期間内で最初に設定スコア閾値以上になった日
-- `first_score_signal_close`: `first_score_signal_date` の終値
-- `return_since_first_score_signal`: `first_score_signal_close` から現在株価までの騰落
-
-## 評価メモ
-
-`+15% / -10%` ローリング評価:
-
-- `valid_2023`: `valid_precision_at_20` 0.30
-- `valid_2024`: `valid_precision_at_20` 0.45
-- `valid_2025`: `valid_precision_at_20` 0.35
-
-TOPIX proxy特徴量は試しましたが、full版は `valid_2024` が悪化し、相対リターン2本版も地合いなしを上回らなかったため、現時点では採用していません。
-
-学習時のサンプル重み:
-
-- 標準は `--sample-weight-mode future_max_ret`
-- 従来どおり、将来最大上昇率を `0%` から `30%` の範囲で重みに反映します
-- `--sample-weight-mode target_future_max_ret` を指定すると、成功ラベルのイベントだけ将来最大上昇率で重くします
-- `--sample-weight-mode uniform` を指定すると、全イベントを同じ重みで学習します
-
-重み付け比較メモ:
-
-- `target_future_max_ret` は、失敗ラベルなのに一時的な高騰だけで重くなる問題を避ける案です
-- ローリング評価では `test_precision_at_50` は改善しましたが、`valid_precision_at_20` と `stop_first_rate` が悪化しました
-- 現時点では本モデルには適用せず、標準の `future_max_ret` を維持します
-
-## セットアップ
-
-初回だけ実行します。
+- Python は `.venv\Scripts\python.exe` を使う
+- 軽い構文確認:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
+& '.venv\Scripts\python.exe' -m compileall src scripts experiments\optimization
 ```
 
-## 注意
-
-- yfinanceはリクエスト制限があります。通常確認は `screen_latest.bat` を使い、データ更新が必要な時だけ `update_and_screen.bat` を使ってください。
-- yfinanceの日本株データには欠損や調整の癖があります。本運用ではJ-Quantsなどの安定したデータソースへの差し替えを推奨します。
-- 長期間学習に広げる場合は、サンプル数が増える一方で、古い相場の癖や生存者バイアスも強くなります。比較実験してから採用してください。
+- 日常運用に不要な大規模探索スクリプトや一時比較スクリプトは削除済み
+- 新しい実験を足す場合は、運用パスに混ぜず `experiments/` 配下へ置く

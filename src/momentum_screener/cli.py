@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -18,7 +18,15 @@ from momentum_screener.features import (
     make_reason,
     raw_gate_mask,
 )
-from momentum_screener.model import load_artifacts, predict_proba, save_artifacts, train_model
+from momentum_screener.model import (
+    RISK_ADJUSTMENT_PRESETS,
+    DEFAULT_RISK_ADJUSTMENT,
+    add_risk_adjusted_score,
+    load_artifacts,
+    predict_proba,
+    save_artifacts,
+    train_model,
+)
 from momentum_screener.settings import GATE_SETTINGS, LABEL_SETTINGS, SCREEN_SETTINGS
 
 
@@ -173,6 +181,7 @@ def build_training_config(args: argparse.Namespace, feature_columns: list[str]) 
         },
         "model": {
             "feature_columns": feature_columns,
+            "risk_adjustment": getattr(args, "risk_adjustment", None),
             "train_end": getattr(args, "train_end", None),
             "valid_end": getattr(args, "valid_end", None),
             "epochs": getattr(args, "epochs", None),
@@ -220,28 +229,6 @@ def refresh_data_command(args: argparse.Namespace) -> None:
         f"rows={len(refreshed)} symbols={refreshed['code'].nunique()} "
         f"min_date={refreshed['date'].min().date()} max_date={refreshed['date'].max().date()} cache={args.cache}"
     )
-def build_listed_stocks_command(args: argparse.Namespace) -> None:
-    df = pd.read_csv(args.input, dtype=str, encoding=args.encoding)
-    required = ["銘柄コード", "国内外区分", "商品分類", "市場区分", "東証上場廃止日"]
-    missing = [column for column in required if column not in df.columns]
-    if missing:
-        raise ValueError(f"JPX issues CSV is missing columns: {missing}")
-
-    markets = args.market or ["プライム", "スタンダード", "グロース"]
-    stocks = df[
-        (df["国内外区分"].eq("国内"))
-        & (df["商品分類"].eq("株式"))
-        & (df["市場区分"].isin(markets))
-        & (df["東証上場廃止日"].isna())
-    ].copy()
-    stocks["code"] = stocks["銘柄コード"].str[:4]
-
-    columns = ["code", "銘柄名称", "市場区分", "業種", "売買単位", "東証上場日"]
-    output = stocks[columns].drop_duplicates("code").sort_values("code")
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output.to_csv(output_path, index=False, encoding="utf-8-sig")
-    print(f"rows={len(output)} markets={output['市場区分'].value_counts().to_dict()} output={output_path}")
 
 
 def train_command(args: argparse.Namespace) -> None:
@@ -264,6 +251,7 @@ def train_command(args: argparse.Namespace) -> None:
         learning_rate=args.learning_rate,
         patience=args.patience,
         seed=args.seed,
+        risk_adjustment=args.risk_adjustment,
     )
     metrics["all_events"] = float(len(events))
     metrics["gate_recall"] = compute_gate_recall(args, labelled, args.target_threshold)
@@ -277,6 +265,7 @@ def train_command(args: argparse.Namespace) -> None:
     metrics["sample_weight_mode"] = args.sample_weight_mode
     metrics["sample_weight_cap"] = args.sample_weight_cap
     metrics["sample_weight_scale"] = args.sample_weight_scale
+    metrics["risk_adjustment"] = args.risk_adjustment
     metrics["training_config"] = build_training_config(args, feature_columns)
     save_artifacts(result, args.model_path)
     write_metrics(metrics, args.metrics_path)
@@ -328,6 +317,7 @@ def rolling_eval_command(args: argparse.Namespace) -> None:
             learning_rate=args.learning_rate,
             patience=args.patience,
             seed=args.seed,
+            risk_adjustment=args.risk_adjustment,
         )
         row = {
             "fold": fold_name,
@@ -345,6 +335,7 @@ def rolling_eval_command(args: argparse.Namespace) -> None:
             "sample_weight_mode": args.sample_weight_mode,
             "sample_weight_cap": args.sample_weight_cap,
             "sample_weight_scale": args.sample_weight_scale,
+            "risk_adjustment": args.risk_adjustment,
             "training_config": build_training_config(args, feature_columns),
         }
         row.update(metrics)
@@ -381,6 +372,7 @@ def inspect_gate_command(args: argparse.Namespace) -> None:
         "event_success_rate": float(events["target_20d"].mean()) if not events.empty else float("nan"),
         "event_avg_future_max_ret_20d": float(events["future_max_ret_20d"].mean()) if not events.empty else float("nan"),
         "gate_recall": compute_gate_recall(args, labelled, args.target_threshold),
+        "risk_adjustment": args.risk_adjustment,
         "training_config": build_training_config(args, feature_columns),
     }
     write_metrics(metrics, args.metrics_path)
@@ -411,7 +403,7 @@ def screen_command(args: argparse.Namespace) -> None:
 
     model, scaler, feature_columns = load_artifacts(args.model_path)
     candidates["follow_through_prob"] = predict_proba(model, scaler, feature_columns, candidates)
-    candidates["final_score"] = candidates["follow_through_prob"]
+    candidates = add_risk_adjusted_score(candidates, preset=args.risk_adjustment)
     latest_by_code = labelled.sort_values("date").groupby("code")["close"].last()
     candidates["latest_close"] = candidates["code"].map(latest_by_code)
     candidates["return_since_candidate"] = candidates["latest_close"] / candidates["close"] - 1.0
@@ -434,19 +426,23 @@ def screen_command(args: argparse.Namespace) -> None:
         lambda row: int((raw_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
         axis=1,
     )
-    score_count_candidates = candidates[candidates["final_score"] >= args.signal_count_min_score]
-    score_recent_counts = score_count_candidates.groupby("code")["date"].nunique()
-    score_signal_counts = score_count_candidates.groupby("code")["date"].apply(lambda dates: dates.sort_values().to_numpy())
+    top30_candidates = (
+        candidates.sort_values(["date", "final_score"], ascending=[True, False])
+        .groupby("date", group_keys=False)
+        .head(30)
+    )
+    top30_recent_counts = top30_candidates.groupby("code")["date"].nunique()
+    top30_signal_counts = top30_candidates.groupby("code")["date"].apply(lambda dates: dates.sort_values().to_numpy())
     first_score_signals = (
-        score_count_candidates.sort_values(["code", "date"])
+        top30_candidates.sort_values(["code", "date"])
         .groupby("code")
         .first()[["date", "close"]]
         .rename(columns={"date": "first_score_signal_date", "close": "first_score_signal_close"})
         .reset_index()
     )
-    candidates["score_recent_signal_count"] = candidates["code"].map(score_recent_counts).fillna(0).astype(int)
-    candidates["score_signal_count_since_candidate"] = candidates.apply(
-        lambda row: int((score_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
+    candidates["top30_recent_signal_count"] = candidates["code"].map(top30_recent_counts).fillna(0).astype(int)
+    candidates["top30_signal_count_since_candidate"] = candidates.apply(
+        lambda row: int((top30_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
         axis=1,
     )
     candidates = candidates.merge(first_score_signals, on="code", how="left")
@@ -466,77 +462,6 @@ def screen_command(args: argparse.Namespace) -> None:
     print(f"candidates={len(output)} output={output_path}")
 
 
-def normalize_code_arg(code: str) -> str:
-    text = code.strip()
-    if text.endswith(".T"):
-        return text
-    return f"{text}.T"
-
-
-def inspect_symbols_command(args: argparse.Namespace) -> None:
-    labelled = build_frame(args)
-    symbols = [normalize_code_arg(code) for code in args.code]
-    rows = labelled[labelled["code"].isin(symbols)].copy()
-    if rows.empty:
-        raise ValueError(f"No rows found for: {symbols}")
-
-    feature_columns = get_feature_columns(args)
-    events = make_event_dataset(rows, require_label=False, feature_columns=feature_columns)
-    model = scaler = feature_columns = None
-    if args.model_path:
-        model, scaler, feature_columns = load_artifacts(args.model_path)
-        if not events.empty:
-            events["follow_through_prob"] = predict_proba(model, scaler, feature_columns, events)
-
-    summaries = []
-    for symbol in symbols:
-        symbol_rows = rows[rows["code"] == symbol]
-        symbol_events = events[events["code"] == symbol].sort_values("date")
-        if symbol_rows.empty:
-            summaries.append({"code": symbol, "rows": 0, "initial_events": 0})
-            continue
-        latest = symbol_rows.sort_values("date").iloc[-1]
-        summary = {
-            "code": symbol,
-            "rows": int(len(symbol_rows)),
-            "first_date": str(symbol_rows["date"].min().date()),
-            "last_date": str(symbol_rows["date"].max().date()),
-            "latest_close": float(latest["close"]),
-            "raw_gate_rows": int(symbol_rows["raw_initial_momentum"].sum()),
-            "initial_events": int(symbol_rows["initial_momentum"].sum()),
-        }
-        if not symbol_events.empty:
-            last_event = symbol_events.iloc[-1]
-            best_event = (
-                symbol_events.sort_values("follow_through_prob", ascending=False).iloc[0]
-                if "follow_through_prob" in symbol_events.columns
-                else symbol_events.sort_values("future_max_ret_20d", ascending=False).iloc[0]
-            )
-            summary.update(
-                {
-                    "last_event_date": str(last_event["date"].date()),
-                    "last_event_future_max_ret_20d": (
-                        None if pd.isna(last_event.get("future_max_ret_20d")) else float(last_event["future_max_ret_20d"])
-                    ),
-                    "best_event_date": str(best_event["date"].date()),
-                    "best_event_future_max_ret_20d": (
-                        None if pd.isna(best_event.get("future_max_ret_20d")) else float(best_event["future_max_ret_20d"])
-                    ),
-                }
-            )
-            if "follow_through_prob" in symbol_events.columns:
-                summary["last_event_prob"] = float(last_event["follow_through_prob"])
-                summary["best_event_prob"] = float(best_event["follow_through_prob"])
-        summaries.append(summary)
-
-    summary_df = pd.DataFrame(summaries)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_df.to_csv(output_path, index=False)
-    print(summary_df.to_string(index=False))
-    print(f"output={output_path}")
-
-
 def run_command(args: argparse.Namespace) -> None:
     train_command(args)
     args.refresh = False
@@ -544,7 +469,7 @@ def run_command(args: argparse.Namespace) -> None:
 
 
 def add_data_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--tickers-file", default="config/tickers_sample.txt")
+    parser.add_argument("--tickers-file", default=None)
     parser.add_argument("--no-sample-tickers", action="store_true", help="Ignore the default sample ticker file.")
     parser.add_argument("--ticker", action="append", help="Additional yfinance ticker. Can be repeated.")
     parser.add_argument("--ticker-csv", default=None, help="Optional CSV containing listed symbols or codes.")
@@ -592,6 +517,12 @@ def add_data_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--sample-weight-cap", type=float, default=0.30)
     parser.add_argument("--sample-weight-scale", type=float, default=10.0)
+    parser.add_argument(
+        "--risk-adjustment",
+        choices=list(RISK_ADJUSTMENT_PRESETS),
+        default=DEFAULT_RISK_ADJUSTMENT,
+        help="Risk-adjustment preset for ranking final_score.",
+    )
 
 
 def add_train_args(parser: argparse.ArgumentParser) -> None:
@@ -619,12 +550,6 @@ def add_screen_args(parser: argparse.ArgumentParser, include_model_path: bool = 
         default=SCREEN_SETTINGS["signal_count_days"],
         help="Use the latest N candidate dates for repeat-signal counts.",
     )
-    parser.add_argument(
-        "--signal-count-min-score",
-        type=float,
-        default=SCREEN_SETTINGS["signal_count_min_score"],
-        help="Only count repeat signals whose final_score is at least this value.",
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -635,13 +560,6 @@ def build_parser() -> argparse.ArgumentParser:
     merge_caches.add_argument("input", nargs="+")
     merge_caches.add_argument("--output", required=True)
     merge_caches.set_defaults(func=merge_caches_command)
-
-    build_listed_stocks = subparsers.add_parser("build-listed-stocks", help="Build a common-stock ticker CSV from a JPX issues CSV")
-    build_listed_stocks.add_argument("input")
-    build_listed_stocks.add_argument("--output", default="config/listed_stocks.csv")
-    build_listed_stocks.add_argument("--encoding", default="cp932")
-    build_listed_stocks.add_argument("--market", action="append", help="Market segment to include. Defaults to Prime/Standard/Growth in Japanese.")
-    build_listed_stocks.set_defaults(func=build_listed_stocks_command)
 
     train = subparsers.add_parser("train", help="Download/build events and train the NN")
     add_data_args(train)
@@ -674,13 +592,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_screen_args(screen)
     screen.set_defaults(func=screen_command)
 
-    inspect_symbols = subparsers.add_parser("inspect-symbols", help="Inspect gate/model history for specific symbols")
-    add_data_args(inspect_symbols)
-    inspect_symbols.add_argument("code", nargs="+", help="Code such as 186A, 6976, or 6996.T")
-    inspect_symbols.add_argument("--model-path", default="models/momentum_nn.pt")
-    inspect_symbols.add_argument("--output", default="outputs/symbol_inspection.csv")
-    inspect_symbols.set_defaults(func=inspect_symbols_command)
-
     run = subparsers.add_parser("run", help="Train and then screen in one command")
     add_data_args(run)
     add_train_args(run)
@@ -697,3 +608,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
