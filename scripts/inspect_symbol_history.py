@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE = ROOT / "data" / "ohlcv_current.csv"
 DEFAULT_MODEL = ROOT / "models" / "momentum_nn_production.pt"
 DEFAULT_LISTED = ROOT / "config" / "listed_stocks.csv"
+DEFAULT_RANK_HISTORY = ROOT / "outputs" / "candidates_rank_history.csv"
 DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "symbol_history"
 
 
@@ -69,43 +70,60 @@ def format_pct(value: float | None) -> str:
     return f"{value:+.1%}"
 
 
+def load_rank_history(args: argparse.Namespace, symbol: str) -> pd.DataFrame | None:
+    if args.no_rank_cache or not args.rank_history.exists():
+        return None
+    history = pd.read_csv(args.rank_history, parse_dates=["date"], dtype={"code": str})
+    required = {"date", "code", "close", "final_score", "score_rank_in_date"}
+    if not required.issubset(history.columns):
+        return None
+    return history[(history["code"] == symbol) & (history["score_rank_in_date"] <= args.top_n)].copy()
+
+
 def build_history(args: argparse.Namespace) -> tuple[pd.DataFrame, str]:
     symbol = normalize_code(args.code)
     ohlcv = pd.read_csv(args.cache, parse_dates=["date"], dtype={"code": str})
-    symbol_ohlcv = ohlcv[ohlcv["code"] == symbol].copy()
-    if symbol_ohlcv.empty:
+    if ohlcv[ohlcv["code"] == symbol].empty:
         raise ValueError(f"No OHLCV rows found for {symbol}. Check data cache or code.")
 
-    features = add_features(symbol_ohlcv)
-    gated = add_initial_momentum_gate(
-        features,
-        cooldown_days=args.cooldown_days,
-        min_turnover_5d=args.gate_min_turnover_5d,
-        min_ret_5d=args.gate_min_ret_5d,
-        min_turnover_ratio_1d_20d=args.gate_min_turnover_ratio_1d_20d,
-        min_turnover_ratio_5d_20d=args.gate_min_turnover_ratio_5d_20d,
-        min_close_ma25_ratio=args.gate_min_close_ma25_ratio,
-    ).sort_values("date").reset_index(drop=True)
+    candidates = load_rank_history(args, symbol)
+    if candidates is None:
+        features = add_features(ohlcv)
+        gated = add_initial_momentum_gate(
+            features,
+            cooldown_days=args.cooldown_days,
+            min_turnover_5d=args.gate_min_turnover_5d,
+            min_ret_5d=args.gate_min_ret_5d,
+            min_turnover_ratio_1d_20d=args.gate_min_turnover_ratio_1d_20d,
+            min_turnover_ratio_5d_20d=args.gate_min_turnover_ratio_5d_20d,
+            min_close_ma25_ratio=args.gate_min_close_ma25_ratio,
+        ).sort_values(["code", "date"]).reset_index(drop=True)
 
-    candidates = gated[gated["raw_initial_momentum"]].copy()
-    candidates = candidates.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURE_COLUMNS)
+        candidates = gated[gated["raw_initial_momentum"]].copy()
+        candidates = candidates.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURE_COLUMNS)
+        if candidates.empty:
+            return pd.DataFrame(), symbol
+
+        model, scaler, feature_columns = load_artifacts(args.model_path)
+        candidates["final_score"] = predict_proba(model, scaler, feature_columns, candidates)
+        candidates["score_rank_in_date"] = (
+            candidates.groupby("date")["final_score"].rank(method="first", ascending=False).astype(int)
+        )
+        candidates = candidates[
+            (candidates["code"] == symbol) & (candidates["score_rank_in_date"] <= args.top_n)
+        ].copy()
     if candidates.empty:
         return pd.DataFrame(), symbol
 
-    model, scaler, feature_columns = load_artifacts(args.model_path)
-    candidates["final_score"] = predict_proba(model, scaler, feature_columns, candidates)
-    candidates = candidates[candidates["final_score"] > args.score_threshold].copy()
-    if candidates.empty:
-        return pd.DataFrame(), symbol
-
-    positions = pd.Series(gated.index.to_numpy(), index=gated["date"])
+    symbol_gated = add_features(ohlcv[ohlcv["code"] == symbol].copy()).sort_values("date").reset_index(drop=True)
+    positions = pd.Series(symbol_gated.index.to_numpy(), index=symbol_gated["date"])
     rows: list[dict[str, object]] = []
-    latest = gated.iloc[-1]
+    latest = symbol_gated.iloc[-1]
     for _, candidate in candidates.sort_values("date").iterrows():
         position = int(positions[candidate["date"]])
-        result_position = min(position + args.horizon, len(gated) - 1)
+        result_position = min(position + args.horizon, len(symbol_gated) - 1)
         entry_position = position + 1
-        result = gated.iloc[result_position]
+        result = symbol_gated.iloc[result_position]
         elapsed_days = result_position - position
         complete = elapsed_days >= args.horizon
 
@@ -114,11 +132,11 @@ def build_history(args: argparse.Namespace) -> tuple[pd.DataFrame, str]:
         entry_to_result = np.nan
         future_max_ret = np.nan
         future_min_ret = np.nan
-        if entry_position < len(gated):
-            entry_row = gated.iloc[entry_position]
+        if entry_position < len(symbol_gated):
+            entry_row = symbol_gated.iloc[entry_position]
             entry_date = entry_row["date"].date().isoformat()
             entry_price = float(entry_row["open"])
-            future_window = gated.iloc[entry_position : result_position + 1]
+            future_window = symbol_gated.iloc[entry_position : result_position + 1]
             if np.isfinite(entry_price) and entry_price > 0 and not future_window.empty:
                 entry_to_result = float(result["close"] / entry_price - 1.0)
                 future_max_ret = float(future_window["high"].max() / entry_price - 1.0)
@@ -130,6 +148,7 @@ def build_history(args: argparse.Namespace) -> tuple[pd.DataFrame, str]:
                 "code": display_code(symbol),
                 "candidate_close": float(candidate["close"]),
                 "score": float(candidate["final_score"]),
+                "rank": int(candidate["score_rank_in_date"]),
                 "ret_5d": float(candidate["ret_5d"]),
                 "turnover_5d_avg": float(candidate["turnover_5d_avg"]),
                 "result_date": result["date"].date().isoformat(),
@@ -156,8 +175,10 @@ def main() -> None:
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--listed-path", type=Path, default=DEFAULT_LISTED)
+    parser.add_argument("--rank-history", type=Path, default=DEFAULT_RANK_HISTORY)
+    parser.add_argument("--no-rank-cache", action="store_true", help="Ignore cached rank history and recompute ranks from OHLCV/model.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--score-threshold", type=float, default=SCREEN_SETTINGS["signal_count_min_score"])
+    parser.add_argument("--top-n", type=int, default=SCREEN_SETTINGS["signal_count_top_n"])
     parser.add_argument("--horizon", type=int, default=LABEL_SETTINGS["horizon"])
     parser.add_argument("--cooldown-days", type=int, default=GATE_SETTINGS["cooldown_days"])
     parser.add_argument("--gate-min-turnover-5d", type=float, default=GATE_SETTINGS["min_turnover_5d"])
@@ -171,7 +192,7 @@ def main() -> None:
     name = load_name(symbol, args.listed_path)
     title = f"{display_code(symbol)} {name}".strip()
     print(f"銘柄: {title}")
-    print(f"条件: raw初動ゲート + final_score > {args.score_threshold:.2f}")
+    print(f"条件: raw初動ゲート + 候補日別final_score上位{args.top_n}位以内")
     print(f"成績: 候補日の翌営業日始値から{args.horizon}営業日後の終値まで。未到達は直近日まで。")
     print()
 
@@ -190,6 +211,7 @@ def main() -> None:
         rows.append(
             {
                 "date": row["date"],
+                "rank": f"{int(row['rank'])}",
                 "score": f"{row['score']:.3f}",
                 "entry_date": row["entry_date"],
                 "entry_open": f"{row['entry_open']:,.1f}" if np.isfinite(row["entry_open"]) else "",
@@ -204,6 +226,7 @@ def main() -> None:
         )
     headers = {
         "date": "候補日",
+        "rank": "順位",
         "score": "スコア",
         "entry_date": "翌営業日",
         "entry_open": "翌始値",
@@ -215,7 +238,7 @@ def main() -> None:
         "max": "最大",
         "min": "最小",
     }
-    print_table(rows, headers, align_right={"score", "entry_open", "days", "return", "close_return", "max", "min"})
+    print_table(rows, headers, align_right={"rank", "score", "entry_open", "days", "return", "close_return", "max", "min"})
     print()
     print(f"signals={len(history)} output={output_path}")
 

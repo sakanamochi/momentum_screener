@@ -26,6 +26,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "screen": {
         "signal_count_days": 6,
+        "signal_count_top_n": 30,
         "signal_count_min_score": 0.55,
     },
 }

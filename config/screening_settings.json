@@ -1,7 +1,7 @@
 {
   "gate": {
     "cooldown_days": 20,
-    "min_turnover_5d": 100000000,
+    "min_turnover_5d": 50000000,
     "min_ret_5d": -0.01,
     "min_turnover_ratio_1d_20d": 1.05,
     "min_turnover_ratio_5d_20d": 1.05,
@@ -16,6 +16,7 @@
   },
   "screen": {
     "signal_count_days": 6,
+    "signal_count_top_n": 30,
     "signal_count_min_score": 0.55
   },
   "_description": {
@@ -36,7 +37,8 @@
     },
     "screen": {
       "signal_count_days": "直近シグナル回数を数える候補日の数。最新候補表示ではこの期間内で同じ銘柄が何回出たかを見る。",
-      "signal_count_min_score": "直近シグナル回数や銘柄別履歴に数えるためのスコア閾値。"
+      "signal_count_top_n": "直近シグナル回数に数える日別順位の上限。30 は各候補日のスコア上位30位以内だけを回数に数える。",
+      "signal_count_min_score": "互換・比較用のスコア閾値。現在の表示回数と銘柄別履歴は signal_count_top_n を優先する。"
     }
   }
 }

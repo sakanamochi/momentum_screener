@@ -31,10 +31,6 @@ def build_frame(args: argparse.Namespace) -> pd.DataFrame:
         symbols = read_tickers(
             tickers_file,
             args.ticker,
-            ticker_universe=args.ticker_universe,
-            code_start=args.code_start,
-            code_end=args.code_end,
-            max_tickers=args.max_tickers,
             ticker_csv=args.ticker_csv,
             ticker_csv_code_column=args.ticker_csv_code_column,
             ticker_csv_market_column=args.ticker_csv_market_column,
@@ -89,10 +85,6 @@ def resolve_symbols(args: argparse.Namespace) -> list[str]:
     symbols = read_tickers(
         tickers_file,
         args.ticker,
-        ticker_universe=args.ticker_universe,
-        code_start=args.code_start,
-        code_end=args.code_end,
-        max_tickers=args.max_tickers,
         ticker_csv=args.ticker_csv,
         ticker_csv_code_column=args.ticker_csv_code_column,
         ticker_csv_market_column=args.ticker_csv_market_column,
@@ -145,10 +137,6 @@ def build_training_config(args: argparse.Namespace, feature_columns: list[str]) 
             "end": args.end,
             "ticker_csv": args.ticker_csv,
             "ticker_csv_code_column": args.ticker_csv_code_column,
-            "ticker_universe": args.ticker_universe,
-            "code_start": args.code_start,
-            "code_end": args.code_end,
-            "max_tickers": args.max_tickers,
             "shares_csv": args.shares_csv,
         },
         "gate": {
@@ -190,20 +178,6 @@ def write_metrics(metrics: dict, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def merge_caches_command(args: argparse.Namespace) -> None:
-    frames = []
-    for cache_path in args.input:
-        frame = pd.read_csv(cache_path, parse_dates=["date"])
-        frames.append(frame)
-    merged = pd.concat(frames, ignore_index=True)
-    merged = merged.drop_duplicates(subset=["date", "code"], keep="last")
-    merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(output, index=False)
-    print(f"rows={len(merged)} symbols={merged['code'].nunique()} output={output}")
 
 
 def refresh_data_command(args: argparse.Namespace) -> None:
@@ -412,6 +386,9 @@ def screen_command(args: argparse.Namespace) -> None:
     model, scaler, feature_columns = load_artifacts(args.model_path)
     candidates["follow_through_prob"] = predict_proba(model, scaler, feature_columns, candidates)
     candidates["final_score"] = candidates["follow_through_prob"]
+    candidates["score_rank_in_date"] = (
+        candidates.groupby("date")["final_score"].rank(method="first", ascending=False).astype(int)
+    )
     latest_by_code = labelled.sort_values("date").groupby("code")["close"].last()
     candidates["latest_close"] = candidates["code"].map(latest_by_code)
     candidates["return_since_candidate"] = candidates["latest_close"] / candidates["close"] - 1.0
@@ -433,6 +410,25 @@ def screen_command(args: argparse.Namespace) -> None:
     candidates["raw_signal_count_since_candidate"] = candidates.apply(
         lambda row: int((raw_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
         axis=1,
+    )
+    top_rank_candidates = candidates[candidates["score_rank_in_date"] <= args.signal_count_top_n]
+    top_recent_counts = top_rank_candidates.groupby("code")["date"].nunique()
+    top_signal_counts = top_rank_candidates.groupby("code")["date"].apply(lambda dates: dates.sort_values().to_numpy())
+    first_top_signals = (
+        top_rank_candidates.sort_values(["code", "date"])
+        .groupby("code")
+        .first()[["date", "close"]]
+        .rename(columns={"date": "first_top_signal_date", "close": "first_top_signal_close"})
+        .reset_index()
+    )
+    candidates["top_recent_signal_count"] = candidates["code"].map(top_recent_counts).fillna(0).astype(int)
+    candidates["top_signal_count_since_candidate"] = candidates.apply(
+        lambda row: int((top_signal_counts.get(row["code"], np.array([], dtype="datetime64[ns]")) >= row["date"]).sum()),
+        axis=1,
+    )
+    candidates = candidates.merge(first_top_signals, on="code", how="left")
+    candidates["return_since_first_top_signal"] = (
+        candidates["latest_close"] / candidates["first_top_signal_close"] - 1.0
     )
     score_count_candidates = candidates[candidates["final_score"] >= args.signal_count_min_score]
     score_recent_counts = score_count_candidates.groupby("code")["date"].nunique()
@@ -465,76 +461,30 @@ def screen_command(args: argparse.Namespace) -> None:
     output.to_csv(output_path, index=False)
     print(f"candidates={len(output)} output={output_path}")
 
-
-def normalize_code_arg(code: str) -> str:
-    text = code.strip()
-    if text.endswith(".T"):
-        return text
-    return f"{text}.T"
-
-
-def inspect_symbols_command(args: argparse.Namespace) -> None:
-    labelled = build_frame(args)
-    symbols = [normalize_code_arg(code) for code in args.code]
-    rows = labelled[labelled["code"].isin(symbols)].copy()
-    if rows.empty:
-        raise ValueError(f"No rows found for: {symbols}")
-
-    feature_columns = get_feature_columns(args)
-    events = make_event_dataset(rows, require_label=False, feature_columns=feature_columns)
-    model = scaler = feature_columns = None
-    if args.model_path:
-        model, scaler, feature_columns = load_artifacts(args.model_path)
-        if not events.empty:
-            events["follow_through_prob"] = predict_proba(model, scaler, feature_columns, events)
-
-    summaries = []
-    for symbol in symbols:
-        symbol_rows = rows[rows["code"] == symbol]
-        symbol_events = events[events["code"] == symbol].sort_values("date")
-        if symbol_rows.empty:
-            summaries.append({"code": symbol, "rows": 0, "initial_events": 0})
-            continue
-        latest = symbol_rows.sort_values("date").iloc[-1]
-        summary = {
-            "code": symbol,
-            "rows": int(len(symbol_rows)),
-            "first_date": str(symbol_rows["date"].min().date()),
-            "last_date": str(symbol_rows["date"].max().date()),
-            "latest_close": float(latest["close"]),
-            "raw_gate_rows": int(symbol_rows["raw_initial_momentum"].sum()),
-            "initial_events": int(symbol_rows["initial_momentum"].sum()),
-        }
-        if not symbol_events.empty:
-            last_event = symbol_events.iloc[-1]
-            best_event = (
-                symbol_events.sort_values("follow_through_prob", ascending=False).iloc[0]
-                if "follow_through_prob" in symbol_events.columns
-                else symbol_events.sort_values("future_max_ret_20d", ascending=False).iloc[0]
-            )
-            summary.update(
-                {
-                    "last_event_date": str(last_event["date"].date()),
-                    "last_event_future_max_ret_20d": (
-                        None if pd.isna(last_event.get("future_max_ret_20d")) else float(last_event["future_max_ret_20d"])
-                    ),
-                    "best_event_date": str(best_event["date"].date()),
-                    "best_event_future_max_ret_20d": (
-                        None if pd.isna(best_event.get("future_max_ret_20d")) else float(best_event["future_max_ret_20d"])
-                    ),
-                }
-            )
-            if "follow_through_prob" in symbol_events.columns:
-                summary["last_event_prob"] = float(last_event["follow_through_prob"])
-                summary["best_event_prob"] = float(best_event["follow_through_prob"])
-        summaries.append(summary)
-
-    summary_df = pd.DataFrame(summaries)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_df.to_csv(output_path, index=False)
-    print(summary_df.to_string(index=False))
-    print(f"output={output_path}")
+    if args.rank_history_output:
+        rank_history = raw_candidates.copy()
+        rank_history["final_score"] = predict_proba(model, scaler, feature_columns, rank_history)
+        rank_history["score_rank_in_date"] = (
+            rank_history.groupby("date")["final_score"].rank(method="first", ascending=False).astype(int)
+        )
+        rank_history = rank_history.sort_values(["date", "score_rank_in_date"], ascending=[False, True])
+        history_columns = [
+            "date",
+            "code",
+            "close",
+            "ret_5d",
+            "ret_20d",
+            "turnover_5d_avg",
+            "turnover_ratio_1d_20d",
+            "turnover_ratio_5d_20d",
+            "final_score",
+            "score_rank_in_date",
+        ]
+        history_output = rank_history.reindex(columns=history_columns)
+        rank_history_output_path = Path(args.rank_history_output)
+        rank_history_output_path.parent.mkdir(parents=True, exist_ok=True)
+        history_output.to_csv(rank_history_output_path, index=False)
+        print(f"rank_history={len(history_output)} output={rank_history_output_path}")
 
 
 def run_command(args: argparse.Namespace) -> None:
@@ -554,15 +504,6 @@ def add_data_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ticker-csv-product-column", default=None)
     parser.add_argument("--ticker-csv-include-product", action="append")
     parser.add_argument("--ticker-csv-exclude-product", action="append")
-    parser.add_argument(
-        "--ticker-universe",
-        choices=["none", "tse-all"],
-        default="none",
-        help="Use generated ticker universe. tse-all tries 1300.T through 9999.T and keeps symbols yfinance returns.",
-    )
-    parser.add_argument("--code-start", type=int, default=1300)
-    parser.add_argument("--code-end", type=int, default=9999)
-    parser.add_argument("--max-tickers", type=int, default=None, help="Limit ticker count for trial runs.")
     parser.add_argument("--start", default="2020-01-01")
     parser.add_argument("--end", default=None)
     parser.add_argument("--cache", default="data/ohlcv.csv")
@@ -611,6 +552,11 @@ def add_screen_args(parser: argparse.ArgumentParser, include_model_path: bool = 
     if include_model_path:
         parser.add_argument("--model-path", default="models/momentum_nn.pt")
     parser.add_argument("--output", default="outputs/candidates.csv")
+    parser.add_argument(
+        "--rank-history-output",
+        default=None,
+        help="Optional CSV path for all raw candidates with per-date score ranks.",
+    )
     parser.add_argument("--as-of", default=None, help="Screen a specific date, e.g. 2026-05-25. Defaults to latest candidate date.")
     parser.add_argument("--recent-days", type=int, default=1, help="Keep candidates from the latest N candidate dates.")
     parser.add_argument(
@@ -620,21 +566,22 @@ def add_screen_args(parser: argparse.ArgumentParser, include_model_path: bool = 
         help="Use the latest N candidate dates for repeat-signal counts.",
     )
     parser.add_argument(
+        "--signal-count-top-n",
+        type=int,
+        default=SCREEN_SETTINGS["signal_count_top_n"],
+        help="Only count repeat signals that ranked within the top N candidates for their date.",
+    )
+    parser.add_argument(
         "--signal-count-min-score",
         type=float,
         default=SCREEN_SETTINGS["signal_count_min_score"],
-        help="Only count repeat signals whose final_score is at least this value.",
+        help="Legacy score-threshold repeat count kept in CSV outputs for comparison.",
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Initial momentum NN screener")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    merge_caches = subparsers.add_parser("merge-caches", help="Merge multiple OHLCV cache CSV files")
-    merge_caches.add_argument("input", nargs="+")
-    merge_caches.add_argument("--output", required=True)
-    merge_caches.set_defaults(func=merge_caches_command)
 
     build_listed_stocks = subparsers.add_parser("build-listed-stocks", help="Build a common-stock ticker CSV from a JPX issues CSV")
     build_listed_stocks.add_argument("input")
@@ -673,13 +620,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_data_args(screen)
     add_screen_args(screen)
     screen.set_defaults(func=screen_command)
-
-    inspect_symbols = subparsers.add_parser("inspect-symbols", help="Inspect gate/model history for specific symbols")
-    add_data_args(inspect_symbols)
-    inspect_symbols.add_argument("code", nargs="+", help="Code such as 186A, 6976, or 6996.T")
-    inspect_symbols.add_argument("--model-path", default="models/momentum_nn.pt")
-    inspect_symbols.add_argument("--output", default="outputs/symbol_inspection.csv")
-    inspect_symbols.set_defaults(func=inspect_symbols_command)
 
     run = subparsers.add_parser("run", help="Train and then screen in one command")
     add_data_args(run)

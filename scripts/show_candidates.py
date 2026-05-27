@@ -61,7 +61,9 @@ def load_recent_summary() -> pd.DataFrame:
     if recent.empty:
         return pd.DataFrame()
 
-    if "score_recent_signal_count" in recent.columns:
+    if "top_recent_signal_count" in recent.columns:
+        count_column = "top_recent_signal_count"
+    elif "score_recent_signal_count" in recent.columns:
         count_column = "score_recent_signal_count"
     elif "raw_recent_signal_count" in recent.columns:
         count_column = "raw_recent_signal_count"
@@ -69,9 +71,15 @@ def load_recent_summary() -> pd.DataFrame:
         count_column = "recent_signal_count"
 
     aggregations = {count_column: "max"}
-    if "first_score_signal_date" in recent.columns:
-        aggregations["first_score_signal_date"] = "min"
-    for column in ["first_score_signal_close", "return_since_first_score_signal"]:
+    for column in ["first_top_signal_date", "first_score_signal_date"]:
+        if column in recent.columns:
+            aggregations[column] = "min"
+    for column in [
+        "first_top_signal_close",
+        "return_since_first_top_signal",
+        "first_score_signal_close",
+        "return_since_first_score_signal",
+    ]:
         if column in recent.columns:
             aggregations[column] = "first"
 
@@ -86,18 +94,35 @@ def print_latest(candidates: pd.DataFrame, listed: pd.DataFrame, recent_summary:
         merged = merged.merge(recent_summary, on="code", how="left", suffixes=("", "_recent"))
         if "recent_signal_count_recent" in merged.columns:
             merged["recent_signal_count"] = merged["recent_signal_count_recent"]
-        for column in ["first_score_signal_date", "first_score_signal_close", "return_since_first_score_signal"]:
+        for column in [
+            "first_top_signal_date",
+            "first_top_signal_close",
+            "return_since_first_top_signal",
+            "first_score_signal_date",
+            "first_score_signal_close",
+            "return_since_first_score_signal",
+        ]:
             recent_column = f"{column}_recent"
             if recent_column in merged.columns:
                 merged[column] = merged[recent_column]
         merged["recent_signal_count"] = merged["recent_signal_count"].fillna(0).astype(int)
+    elif "top_recent_signal_count" in merged.columns:
+        merged["recent_signal_count"] = merged["top_recent_signal_count"].fillna(0).astype(int)
     elif "score_recent_signal_count" in merged.columns:
         merged["recent_signal_count"] = merged["score_recent_signal_count"].fillna(0).astype(int)
     elif "raw_recent_signal_count" in merged.columns:
         merged["recent_signal_count"] = merged["raw_recent_signal_count"].fillna(1).astype(int)
     else:
         merged["recent_signal_count"] = 1
-    for column in ["first_score_signal_date", "return_since_first_score_signal"]:
+    if "first_top_signal_date" in merged.columns:
+        merged["display_first_signal_date"] = merged["first_top_signal_date"]
+    else:
+        merged["display_first_signal_date"] = merged.get("first_score_signal_date", pd.NA)
+    if "return_since_first_top_signal" in merged.columns:
+        merged["display_return_since_first_signal"] = merged["return_since_first_top_signal"]
+    else:
+        merged["display_return_since_first_signal"] = merged.get("return_since_first_score_signal", pd.NA)
+    for column in ["display_first_signal_date", "display_return_since_first_signal"]:
         if column not in merged.columns:
             merged[column] = pd.NA
     output = merged[
@@ -106,21 +131,21 @@ def print_latest(candidates: pd.DataFrame, listed: pd.DataFrame, recent_summary:
             "name",
             "close",
             "recent_signal_count",
-            "first_score_signal_date",
-            "return_since_first_score_signal",
+            "display_first_signal_date",
+            "display_return_since_first_signal",
             "final_score",
         ]
     ].copy()
     output["close"] = output["close"].map(lambda value: f"{float(value):,.1f}")
     output["recent_signal_count"] = output["recent_signal_count"].map(lambda value: f"{int(value)}")
-    output["first_score_signal_date"] = output.apply(
-        lambda row: "" if int(row["recent_signal_count"]) <= 1 or pd.isna(row["first_score_signal_date"]) else str(row["first_score_signal_date"])[:10],
+    output["display_first_signal_date"] = output.apply(
+        lambda row: "" if int(row["recent_signal_count"]) <= 1 or pd.isna(row["display_first_signal_date"]) else str(row["display_first_signal_date"])[:10],
         axis=1,
     )
-    output["return_since_first_score_signal"] = output.apply(
+    output["display_return_since_first_signal"] = output.apply(
         lambda row: ""
-        if int(row["recent_signal_count"]) <= 1 or pd.isna(row["return_since_first_score_signal"])
-        else f"{float(row['return_since_first_score_signal']):+.1%}",
+        if int(row["recent_signal_count"]) <= 1 or pd.isna(row["display_return_since_first_signal"])
+        else f"{float(row['display_return_since_first_signal']):+.1%}",
         axis=1,
     )
     output["final_score"] = output["final_score"].map(lambda value: f"{float(value):.4f}")
@@ -131,8 +156,8 @@ def print_latest(candidates: pd.DataFrame, listed: pd.DataFrame, recent_summary:
         "name": "銘柄名",
         "close": "現在株価",
         "recent_signal_count": "回数",
-        "first_score_signal_date": "初回日",
-        "return_since_first_score_signal": "初回後騰落",
+        "display_first_signal_date": "初回日",
+        "display_return_since_first_signal": "初回後騰落",
         "final_score": "最終スコア",
     }
 
@@ -140,7 +165,7 @@ def print_latest(candidates: pd.DataFrame, listed: pd.DataFrame, recent_summary:
     print_table(
         rows,
         headers,
-        align_right={"close", "recent_signal_count", "return_since_first_score_signal", "final_score"},
+        align_right={"close", "recent_signal_count", "display_return_since_first_signal", "final_score"},
     )
 
 
@@ -154,7 +179,15 @@ def print_recent(listed: pd.DataFrame) -> None:
     recent = recent[recent["date"] < latest_date].copy()
     if recent.empty:
         return
-    if "score_recent_signal_count" in recent.columns:
+    if "top_signal_count_since_candidate" in recent.columns:
+        recent["recent_signal_count"] = recent["top_signal_count_since_candidate"].fillna(
+            recent["recent_signal_count"]
+        )
+    elif "top_recent_signal_count" in recent.columns:
+        recent["recent_signal_count"] = recent["top_recent_signal_count"].fillna(
+            recent["recent_signal_count"]
+        )
+    elif "score_recent_signal_count" in recent.columns:
         recent["recent_signal_count"] = recent["score_recent_signal_count"].fillna(
             recent["recent_signal_count"]
         )

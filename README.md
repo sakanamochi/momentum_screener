@@ -15,16 +15,16 @@ scripts\screen_latest.bat
 動き:
 
 - 既存の `outputs/candidates_current.csv` が最新なら、再推論せずに即表示
-- CSVが無い、`outputs/candidates_recent.csv` が無い、またはモデル/データより古い場合だけ、既存モデルで再推論
+- CSVが無い、`outputs/candidates_recent.csv` や `outputs/candidates_rank_history.csv` が無い、またはモデル/データより古い場合だけ、既存モデルで再推論
 - 最新候補には `銘柄コード`, `銘柄名`, `現在株価`, `回数`, `初回日`, `初回後騰落`, `最終スコア` を表示
 - 直近履歴には、最新日を除く過去5候補日の上位候補も表示
-- 最新候補CSVは `outputs/candidates_current.csv`、直近履歴CSVは `outputs/candidates_recent.csv` に保存
+- 最新候補CSVは `outputs/candidates_current.csv`、直近履歴CSVは `outputs/candidates_recent.csv`、日別順位履歴CSVは `outputs/candidates_rank_history.csv` に保存
 
 最新候補の見方:
 
 - `最終スコア`: モデルが推定したフォロースルー確率
-- `回数`: 最新日を含む直近候補日のうち、初動ゲートに入り、かつ設定スコア閾値以上だった回数
-- `初回日`: 直近候補日の中で、同じ銘柄が初めて設定スコア閾値以上になった日
+- `回数`: 最新日を含む直近候補日のうち、初動ゲートに入り、かつ候補日別スコア上位30位以内だった回数
+- `初回日`: 直近候補日の中で、同じ銘柄が初めて候補日別スコア上位30位以内になった日
 - `初回後騰落`: `初回日` の終値から現在株価までの騰落
 - 回数が1の銘柄は、初回日と初回後騰落を空欄表示
 
@@ -85,7 +85,7 @@ https://clientportal.jpx.co.jp/ClientPortal/s/Issue?language=ja
 scripts\inspect_gate.bat
 ```
 
-銘柄コードを指定して、過去に設定スコア閾値を超えた候補日と、翌営業日始値から20営業日後または直近日までの成績を見る場合:
+銘柄コードを指定して、過去に候補日別スコア上位30位以内だった候補日と、翌営業日始値から20営業日後または直近日までの成績を見る場合:
 
 ```bat
 scripts\inspect_symbol_history.bat
@@ -96,6 +96,8 @@ scripts\inspect_symbol_history.bat
 ```bat
 scripts\inspect_symbol_history.bat 285A
 ```
+
+`outputs/candidates_rank_history.csv` がある場合は、日別順位を再計算せずにそのキャッシュを使います。
 
 PowerShell版とGit Bash版もあります。
 
@@ -124,6 +126,7 @@ bash experiments/evaluation/rolling_evaluation.sh
 - `models/momentum_nn_production.pt`: 運用モデル
 - `outputs/candidates_current.csv`: 現在の候補CSV
 - `outputs/candidates_recent.csv`: 最新日を含む直近6候補日の履歴CSV
+- `outputs/candidates_rank_history.csv`: 全raw候補の日別スコア順位履歴CSV
 - `outputs/metrics_production.json`: 運用モデルの指標
 - `outputs/gate_current.json`: 現在ゲートの確認指標
 
@@ -160,7 +163,7 @@ bash experiments/evaluation/rolling_evaluation.sh
 - 同じ日に利確ラインと損切りラインへ両方到達した場合は保守的に失敗扱い
 - `stop_first_rate_at_20/50` は上位20/50件のうち、損切りラインへ先に到達した比率
 
-現在の初動ゲート、利確/損切り条件、直近回数のスコア閾値は `config/screening_settings.json` で管理します。
+現在の初動ゲート、利確/損切り条件、直近回数の上位順位条件は `config/screening_settings.json` で管理します。
 各パラメータの意味も同じファイル内の `_description` にまとめています。
 
 学習時と推論時の候補扱い:
@@ -174,8 +177,14 @@ bash experiments/evaluation/rolling_evaluation.sh
 
 - `recent_signal_count`: 出力期間内でraw条件に入った回数
 - `raw_recent_signal_count`: 集計期間内でraw条件に入った回数
-- `score_recent_signal_count`: 集計期間内でraw条件に入り、かつ設定スコア閾値以上だった回数
-- `first_score_signal_date`: 集計期間内で最初に設定スコア閾値以上になった日
+- `score_rank_in_date`: 同じ候補日のraw候補内でのスコア順位
+- `top_recent_signal_count`: 集計期間内でraw条件に入り、かつ候補日別スコア上位30位以内だった回数
+- `top_signal_count_since_candidate`: 候補日以降、集計期間内で候補日別スコア上位30位以内だった回数
+- `first_top_signal_date`: 集計期間内で最初に候補日別スコア上位30位以内だった日
+- `first_top_signal_close`: `first_top_signal_date` の終値
+- `return_since_first_top_signal`: `first_top_signal_close` から現在株価までの騰落
+- `score_recent_signal_count`: 集計期間内でraw条件に入り、かつ設定スコア閾値以上だった回数。互換・比較用。
+- `first_score_signal_date`: 集計期間内で最初に設定スコア閾値以上になった日。互換・比較用。
 - `first_score_signal_close`: `first_score_signal_date` の終値
 - `return_since_first_score_signal`: `first_score_signal_close` から現在株価までの騰落
 

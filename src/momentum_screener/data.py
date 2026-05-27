@@ -28,10 +28,6 @@ def _normalize_symbol(value: object) -> str | None:
     return text
 
 
-def generate_tse_symbols(code_start: int = 1300, code_end: int = 9999) -> list[str]:
-    return [f"{code}.T" for code in range(code_start, code_end + 1)]
-
-
 def read_ticker_csv(
     path: str | Path,
     code_column: str = "code",
@@ -69,10 +65,6 @@ def read_ticker_csv(
 def read_tickers(
     path: str | Path | None,
     tickers: list[str] | None,
-    ticker_universe: str = "none",
-    code_start: int = 1300,
-    code_end: int = 9999,
-    max_tickers: int | None = None,
     ticker_csv: str | Path | None = None,
     ticker_csv_code_column: str = "code",
     ticker_csv_market_column: str | None = None,
@@ -101,13 +93,7 @@ def read_tickers(
                 exclude_products=ticker_csv_exclude_products,
             )
         )
-    if ticker_universe == "tse-all":
-        symbols.extend(generate_tse_symbols(code_start=code_start, code_end=code_end))
-
-    unique_symbols = sorted(dict.fromkeys(symbols))
-    if max_tickers:
-        unique_symbols = unique_symbols[:max_tickers]
-    return unique_symbols
+    return sorted(dict.fromkeys(symbols))
 
 
 def normalize_yfinance_frame(raw: pd.DataFrame, symbol: str) -> pd.DataFrame:
